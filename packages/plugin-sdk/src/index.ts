@@ -115,6 +115,32 @@ export interface PluginNetwork {
   onResponse(handler: NetworkResponseHandler): UnsubscribeFn;
 }
 
+// ── Sandboxed Filesystem ─────────────────────────────────────────────────────
+
+export type FileEncoding = "utf8" | "base64";
+
+export interface PluginFileStat {
+  size: number;
+  isFile: boolean;
+  isDirectory: boolean;
+  mtimeMs: number;
+}
+
+/**
+ * Sandboxed filesystem access. All paths are relative to (and confined within)
+ * the plugin's private data directory; paths that escape it are rejected. Use
+ * "base64" encoding for binary data.
+ */
+export interface PluginFS {
+  read(path: string, encoding?: FileEncoding): Promise<string>;
+  write(path: string, data: string, encoding?: FileEncoding): Promise<void>;
+  exists(path: string): Promise<boolean>;
+  list(path?: string): Promise<string[]>;
+  delete(path: string): Promise<void>;
+  mkdir(path: string): Promise<void>;
+  stat(path: string): Promise<PluginFileStat>;
+}
+
 // ── App Info ─────────────────────────────────────────────────────────────────
 
 export interface AppInfo {
@@ -150,6 +176,7 @@ export interface PluginAPI {
   react: ReactAPI;
   ipc: PluginIPC;
   network: PluginNetwork;
+  fs: PluginFS;
   app: PluginApp;
 }
 

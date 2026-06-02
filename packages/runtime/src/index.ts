@@ -11,6 +11,16 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 
 import { createMainNetwork, type MainNetwork } from "./network";
+import {
+  pluginDataDir,
+  fsRead,
+  fsWrite,
+  fsExists,
+  fsList,
+  fsDelete,
+  fsMkdir,
+  fsStat,
+} from "./fs-sandbox";
 
 // Resolve user data paths from environment variables set by loader.
 function requireEnv(name: string): string {
@@ -272,6 +282,18 @@ function createMainProcessAPI(manifest: import("@desktop-proxy/plugin-sdk").Plug
       },
     },
     network: getMainNetwork(),
+    fs: (() => {
+      const root = pluginDataDir(userRoot, manifest.id);
+      return {
+        read: async (p: string, encoding?: import("@desktop-proxy/plugin-sdk").FileEncoding) => fsRead(root, p, encoding),
+        write: async (p: string, data: string, encoding?: import("@desktop-proxy/plugin-sdk").FileEncoding) => { fsWrite(root, p, data, encoding); },
+        exists: async (p: string) => fsExists(root, p),
+        list: async (p?: string) => fsList(root, p),
+        delete: async (p: string) => { fsDelete(root, p); },
+        mkdir: async (p: string) => { fsMkdir(root, p); },
+        stat: async (p: string) => fsStat(root, p),
+      };
+    })(),
     app: {
       getInfo: async () => {
         return {
@@ -381,6 +403,33 @@ function setupIPCBridge(): void {
   electron.ipcMain.on("desktop-proxy:preload-log", (_e, level: string, msg: string) => {
     log(level, `[preload]`, msg);
   });
+
+  // Sandboxed filesystem — renderer plugins reach disk through these handlers.
+  // The plugin id scopes each call to its own confined data directory.
+  type FileEncoding = import("@desktop-proxy/plugin-sdk").FileEncoding;
+  const fsRoot = (id: string) => pluginDataDir(userRoot, id);
+
+  electron.ipcMain.handle("desktop-proxy:fs:read", async (_e, id: string, p: string, encoding?: FileEncoding) =>
+    fsRead(fsRoot(id), p, encoding),
+  );
+  electron.ipcMain.handle("desktop-proxy:fs:write", async (_e, id: string, p: string, data: string, encoding?: FileEncoding) =>
+    fsWrite(fsRoot(id), p, data, encoding),
+  );
+  electron.ipcMain.handle("desktop-proxy:fs:exists", async (_e, id: string, p: string) =>
+    fsExists(fsRoot(id), p),
+  );
+  electron.ipcMain.handle("desktop-proxy:fs:list", async (_e, id: string, p?: string) =>
+    fsList(fsRoot(id), p),
+  );
+  electron.ipcMain.handle("desktop-proxy:fs:delete", async (_e, id: string, p: string) =>
+    fsDelete(fsRoot(id), p),
+  );
+  electron.ipcMain.handle("desktop-proxy:fs:mkdir", async (_e, id: string, p: string) =>
+    fsMkdir(fsRoot(id), p),
+  );
+  electron.ipcMain.handle("desktop-proxy:fs:stat", async (_e, id: string, p: string) =>
+    fsStat(fsRoot(id), p),
+  );
 }
 
 // ── FS Watcher (Hot Reload) ──────────────────────────────────────────────────

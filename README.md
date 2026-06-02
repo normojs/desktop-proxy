@@ -192,7 +192,8 @@ Everything user-editable stays in `~/.desktop-proxy/`:
 | Loader patch | inside the target `app.asar` |
 | Runtime | `~/.desktop-proxy/runtime/` |
 | Plugins | `~/.desktop-proxy/plugins/` |
-| Per-plugin data | `~/.desktop-proxy/plugin-<id>.json` |
+| Per-plugin key/value (`api.storage`) | `~/.desktop-proxy/plugin-<id>.json` |
+| Per-plugin files (`api.fs` sandbox) | `~/.desktop-proxy/plugin-data/<id>/` |
 | Config | `~/.desktop-proxy/config.json` |
 | Install state | `~/.desktop-proxy/state.json` |
 | Logs | `~/.desktop-proxy/log/` (`main.log`, `loader.log`) |
@@ -286,6 +287,7 @@ re-runs renderer plugins when files change.
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement` (renderer). |
 | `api.ipc` | Namespaced `on` / `send` / `invoke` between main and renderer. |
 | `api.network` | `onRequest` / `onResponse` interception hooks. |
+| `api.fs` | Sandboxed file I/O confined to the plugin's data dir: `read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat` (utf8 or base64). |
 | `api.app` | `getInfo()` and `getWindows()`. |
 
 ### Example: the bundled request interceptor

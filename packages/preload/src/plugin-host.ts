@@ -17,6 +17,7 @@ import type {
   ReactAPI,
   PluginIPC,
   PluginNetwork,
+  PluginFS,
   PluginApp,
   UnsubscribeFn,
 } from "@desktop-proxy/plugin-sdk";
@@ -173,6 +174,16 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
     onResponse: (handler) => onResponse(handler),
   };
 
+  const fsApi: PluginFS = {
+    read: (p, encoding) => ipc.invoke("desktop-proxy:fs:read", id, p, encoding),
+    write: (p, data, encoding) => ipc.invoke("desktop-proxy:fs:write", id, p, data, encoding),
+    exists: (p) => ipc.invoke("desktop-proxy:fs:exists", id, p),
+    list: (p) => ipc.invoke("desktop-proxy:fs:list", id, p),
+    delete: (p) => ipc.invoke("desktop-proxy:fs:delete", id, p),
+    mkdir: (p) => ipc.invoke("desktop-proxy:fs:mkdir", id, p),
+    stat: (p) => ipc.invoke("desktop-proxy:fs:stat", id, p),
+  };
+
   const app: PluginApp = {
     getInfo: async () => ipc.invoke("desktop-proxy:app-info"),
     getWindows: async () => ipc.invoke("desktop-proxy:windows"),
@@ -187,6 +198,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
     react,
     ipc: ipcBridge,
     network,
+    fs: fsApi,
     app,
   };
 }
