@@ -144,9 +144,49 @@ export interface NetworkResponse {
 export type NetworkRequestHandler = (request: NetworkRequest) => NetworkRequest | void | Promise<NetworkRequest | void>;
 export type NetworkResponseHandler = (response: NetworkResponse) => NetworkResponse | void | Promise<NetworkResponse | void>;
 
+export interface NetworkContinueMods {
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  bodyEncoding?: "utf8" | "base64";
+}
+
+export interface NetworkFulfill {
+  status: number;
+  headers?: Record<string, string>;
+  body?: string;
+  bodyEncoding?: "utf8" | "base64";
+}
+
+/** Decide a paused request's fate. The first handler to act wins. */
+export interface NetworkRequestControl {
+  /** Let it proceed, optionally with modifications. */
+  continue(mods?: NetworkContinueMods): void;
+  /** Short-circuit with a synthetic (mock) response. */
+  fulfill(response: NetworkFulfill): void;
+  /** Block the request. */
+  fail(reason?: string): void;
+}
+
+export type NetworkInterceptHandler = (
+  request: NetworkRequest,
+  control: NetworkRequestControl,
+) => void | Promise<void>;
+
+export interface NetworkInterceptFilter {
+  /** Only run for URLs containing one of these substrings. */
+  urls?: string[];
+}
+
 export interface PluginNetwork {
   onRequest(handler: NetworkRequestHandler): UnsubscribeFn;
   onResponse(handler: NetworkResponseHandler): UnsubscribeFn;
+  /**
+   * Intercept requests with full control (continue/modify, fulfill/mock, fail/block).
+   * Requires CDP request interception to be enabled (config `cdpIntercept`).
+   */
+  intercept(handler: NetworkInterceptHandler, filter?: NetworkInterceptFilter): UnsubscribeFn;
 }
 
 // ── Sandboxed Filesystem ─────────────────────────────────────────────────────

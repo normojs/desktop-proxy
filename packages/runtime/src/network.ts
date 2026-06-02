@@ -32,10 +32,13 @@ import type {
   NetworkRequestHandler,
   NetworkResponse,
   NetworkResponseHandler,
+  NetworkInterceptHandler,
+  NetworkInterceptFilter,
   UnsubscribeFn,
 } from "@desktop-proxy/plugin-sdk";
 
 import { installNodeIntercept } from "./net/node-intercept";
+import { runInterceptors, type NetDecision, type InterceptRegistration } from "./net/intercept";
 
 type Logger = (level: string, ...args: unknown[]) => void;
 
@@ -48,6 +51,12 @@ export interface MainNetwork {
   observeResponse(res: NetworkResponse): void;
   /** True if any plugin is listening (lets observers skip work). */
   hasHandlers(): boolean;
+  /** Register a full-control intercept handler (continue/fulfill/fail). */
+  intercept(handler: NetworkInterceptHandler, filter?: NetworkInterceptFilter): UnsubscribeFn;
+  /** Run all intercept handlers for a request; first to act decides. */
+  dispatchIntercept(req: NetworkRequest): Promise<NetDecision>;
+  /** True if any intercept handler is registered. */
+  hasInterceptors(): boolean;
 }
 
 const URL_FILTER = { urls: ["*://*/*"] };
@@ -64,6 +73,7 @@ export function createMainNetwork(
 ): MainNetwork {
   const requestHandlers = new Set<NetworkRequestHandler>();
   const responseHandlers = new Set<NetworkResponseHandler>();
+  const interceptRegs = new Set<InterceptRegistration>();
 
   let ready = false;
   let requestAttached = false;
@@ -220,5 +230,14 @@ export function createMainNetwork(
     observeRequest,
     observeResponse,
     hasHandlers,
+    intercept(handler: NetworkInterceptHandler, filter?: NetworkInterceptFilter): UnsubscribeFn {
+      const reg: InterceptRegistration = { handler, filter };
+      interceptRegs.add(reg);
+      return () => {
+        interceptRegs.delete(reg);
+      };
+    },
+    dispatchIntercept: (req: NetworkRequest) => runInterceptors(interceptRegs, req),
+    hasInterceptors: () => interceptRegs.size > 0,
   };
 }

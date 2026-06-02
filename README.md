@@ -158,7 +158,7 @@ node packages/installer/dist/cli.js <command> [options]
 | `plugin enable\|disable <id>` | Enable/disable a plugin (applied live if the app is running). |
 | `plugin check-updates [--json]` | Check each plugin's `githubRepo` for a newer release. |
 | `config get [key] [--json]` | Print the config (or a single key). |
-| `config set <key> <value>` | Set a config key (`logLevel`, `stealth`, `safeMode`, `autoUpdate`, `enforcePermissions`, `maxResponseBodyBytes`, `cdpNetwork`). |
+| `config set <key> <value>` | Set a config key (`logLevel`, `stealth`, `safeMode`, `autoUpdate`, `enforcePermissions`, `maxResponseBodyBytes`, `cdpNetwork`, `cdpIntercept`). |
 | `watch install\|uninstall\|status` | Auto re-apply the patch when the app updates (macOS). |
 | `create-plugin <dir>` | Scaffold a new plugin (`--id` / `--name` / `--scope`). |
 | `validate-plugin <dir> [--json]` | Validate a plugin's manifest and entry file. |
@@ -322,7 +322,7 @@ re-runs renderer plugins when files change.
 | `api.settings` | `registerSection` / `registerPage`, rendered in the framework's overlay panel. |
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement` (renderer). |
 | `api.ipc` | Namespaced `on` / `send` / `invoke` between main and renderer. |
-| `api.network` | `onRequest` / `onResponse` interception hooks. Response bodies are read non-blocking (streaming-safe), capped at `maxResponseBodyBytes` (default 1 MiB), and skipped for binary types. Events carry a `source` tag. Main-scope plugins also observe Node `http`/`https` traffic that `webRequest` can't see, and — when `cdpNetwork` is enabled — all renderer requests via CDP (works under `contextIsolation`). |
+| `api.network` | `onRequest` / `onResponse` observe hooks plus `intercept(handler, filter?)` for full control — `continue(mods)` / `fulfill(mock)` / `fail(block)`. Observe is streaming-safe, capped (`maxResponseBodyBytes`), binary-skipped, and `source`-tagged. Main-scope plugins also see Node `http`/`https` (invisible to `webRequest`) and, with `cdpNetwork`, all renderer requests via CDP (works under `contextIsolation`). `intercept` runs main-side via CDP Fetch when `cdpIntercept` is enabled. |
 | `api.fs` | Sandboxed file I/O confined to the plugin's data dir: `read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat` (utf8 or base64). |
 | `api.cdp` | Chrome DevTools Protocol: `attach`/`send`/`on`/`evaluate` plus `onResponse`/`onRequestPaused` helpers. Renderer targets its own webContents; main targets the focused window. Requires the `"cdp"` permission. |
 | `api.ui` | DOM helpers: `injectCSS()` (returns a remover) and `toast()` (host-isolated notification). |

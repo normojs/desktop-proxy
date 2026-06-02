@@ -18,6 +18,7 @@ import type { WebContents } from "electron";
 import type { NetworkRequest, NetworkResponse } from "@desktop-proxy/plugin-sdk";
 
 import type { MainCDP } from "../cdp";
+import { toHeaderEntries, type NetDecision } from "./intercept";
 
 type Logger = (level: string, ...args: unknown[]) => void;
 
@@ -26,7 +27,20 @@ export interface CdpNetworkDeps {
   observeResponse: (res: NetworkResponse) => void;
   maxBodyBytes: () => number;
   log: Logger;
+  /** When true, also enable the Fetch domain to allow modify/block/mock. */
+  interceptEnabled: () => boolean;
+  /** Resolve a paused request's decision (first intercept handler to act wins). */
+  dispatchIntercept: (req: NetworkRequest) => Promise<NetDecision>;
 }
+
+const FETCH_DECISION_TIMEOUT_MS = 3000;
+
+const VALID_ERROR_REASONS = new Set([
+  "Failed", "Aborted", "TimedOut", "AccessDenied", "ConnectionClosed",
+  "ConnectionReset", "ConnectionRefused", "ConnectionAborted", "ConnectionFailed",
+  "NameNotResolved", "InternetDisconnected", "AddressUnreachable",
+  "BlockedByClient", "BlockedByResponse",
+]);
 
 interface PendingResponse {
   status: number;
@@ -139,6 +153,8 @@ export function createCdpNetworkObserver(hub: MainCDP, deps: CdpNetworkDeps): Cd
           }
         } else if (method === "Network.loadingFailed") {
           pending.delete(String(p.requestId));
+        } else if (method === "Fetch.requestPaused") {
+          void handleFetchPaused(wc, p);
         }
       } catch (e) {
         deps.log("warn", "cdp-network: event handling error:", String(e));
@@ -148,8 +164,66 @@ export function createCdpNetworkObserver(hub: MainCDP, deps: CdpNetworkDeps): Cd
     void hub.send(wc, "Network.enable").catch((e) =>
       deps.log("warn", `cdp-network: Network.enable failed for wc ${wc.id}:`, String(e)),
     );
+    if (deps.interceptEnabled()) {
+      void hub
+        .send(wc, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] })
+        .catch((e) => deps.log("warn", `cdp-network: Fetch.enable failed for wc ${wc.id}:`, String(e)));
+    }
     wc.once("destroyed", () => observed.delete(wc.id));
     deps.log("info", `cdp-network: observing webContents ${wc.id}`);
+  }
+
+  async function handleFetchPaused(wc: WebContents, p: Record<string, unknown>): Promise<void> {
+    const requestId = String(p.requestId);
+    // We only enable the Request stage; if a Response-stage event ever arrives,
+    // just continue it (never pause/buffer a response — that breaks streaming).
+    if (p.responseStatusCode !== undefined || p.responseErrorReason !== undefined) {
+      await hub.send(wc, "Fetch.continueResponse", { requestId }).catch(() => undefined);
+      return;
+    }
+
+    const request = p.request as { url: string; method: string; headers?: Record<string, unknown>; postData?: string };
+    const req: NetworkRequest = {
+      id: requestId,
+      source: "renderer-cdp",
+      _type: mapResourceType(String(p.resourceType ?? "")),
+      method: request.method,
+      url: request.url,
+      headers: toRecord(request.headers),
+      body: typeof request.postData === "string" ? request.postData : null,
+      timestamp: Date.now(),
+    };
+
+    let decision: NetDecision = { action: "continue" };
+    try {
+      decision = await withTimeout(deps.dispatchIntercept(req), FETCH_DECISION_TIMEOUT_MS, { action: "continue" });
+    } catch (e) {
+      deps.log("error", "cdp-network: intercept dispatch failed:", String(e));
+    }
+
+    try {
+      if (decision.action === "fulfill") {
+        await hub.send(wc, "Fetch.fulfillRequest", {
+          requestId,
+          responseCode: decision.response.status,
+          responseHeaders: toHeaderEntries(decision.response.headers ?? {}),
+          body: encodeBody(decision.response.body, decision.response.bodyEncoding),
+        });
+      } else if (decision.action === "fail") {
+        await hub.send(wc, "Fetch.failRequest", { requestId, errorReason: mapErrorReason(decision.reason) });
+      } else {
+        const params: Record<string, unknown> = { requestId };
+        const mods = decision.mods;
+        if (mods?.url) params.url = mods.url;
+        if (mods?.method) params.method = mods.method;
+        if (mods?.headers) params.headers = toHeaderEntries(mods.headers);
+        if (mods?.body != null) params.postData = encodeBody(mods.body, mods.bodyEncoding);
+        await hub.send(wc, "Fetch.continueRequest", params);
+      }
+    } catch (e) {
+      deps.log("warn", "cdp-network: applying Fetch decision failed:", String(e));
+      await hub.send(wc, "Fetch.continueRequest", { requestId }).catch(() => undefined);
+    }
   }
 
   return { observe };
@@ -169,4 +243,40 @@ function mapResourceType(type: string): NetworkRequest["_type"] {
   if (type === "WebSocket") return "websocket";
   if (type === "XHR" || type === "Fetch") return "xhr";
   return "fetch";
+}
+
+function encodeBody(body: string | undefined, encoding: "utf8" | "base64" | undefined): string | undefined {
+  if (body == null) return undefined;
+  return Buffer.from(body, encoding === "base64" ? "base64" : "utf8").toString("base64");
+}
+
+function mapErrorReason(reason: string | undefined): string {
+  return reason && VALID_ERROR_REASONS.has(reason) ? reason : "BlockedByClient";
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(fallback);
+      }
+    }, ms);
+    void promise
+      .then((value) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        }
+      })
+      .catch(() => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(fallback);
+        }
+      });
+  });
 }

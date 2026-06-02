@@ -85,6 +85,8 @@ interface Config {
   maxResponseBodyBytes?: number;
   /** Observe renderer requests via CDP (catches all page requests; attaches the debugger). */
   cdpNetwork?: boolean;
+  /** Enable CDP Fetch request interception so api.network.intercept can modify/block/mock. */
+  cdpIntercept?: boolean;
   plugins?: Record<string, { enabled: boolean }>;
 }
 
@@ -183,6 +185,8 @@ function getCdpNetworkObserver(): CdpNetworkObserver {
       observeResponse: (res) => net.observeResponse(res),
       maxBodyBytes: () => readConfig().maxResponseBodyBytes ?? 1024 * 1024,
       log,
+      interceptEnabled: () => readConfig().cdpIntercept === true,
+      dispatchIntercept: (req) => net.dispatchIntercept(req),
     });
   }
   return _cdpNetObserver;
@@ -734,8 +738,8 @@ electron.app.on("web-contents-created", (_e, wc) => {
       log("error", `wc ${wc.id} preload-error path=${p}`, String((err as Error)?.stack ?? err));
     });
 
-    // Passive renderer network observation via CDP (opt-in).
-    if (!isSafeModeEnabled() && readConfig().cdpNetwork === true) {
+    // Renderer network observation/interception via CDP (opt-in).
+    if (!isSafeModeEnabled() && (readConfig().cdpNetwork === true || readConfig().cdpIntercept === true)) {
       const type = wc.getType();
       if (type === "window" || type === "webview" || type === "browserView") {
         void getCdpNetworkObserver().observe(wc);

@@ -231,12 +231,22 @@ function createPluginAPI(manifest: PluginManifest): { api: PluginAPI; dispose: (
     ? {
         onRequest: (handler) => remember(onRequest(handler)),
         onResponse: (handler) => remember(onResponse(handler)),
+        intercept: () => {
+          // Renderer-scope intercept (IPC round-trip) is a later phase; full
+          // request interception currently runs main-side via CDP Fetch. Use a
+          // main-scope plugin with config `cdpIntercept` enabled.
+          log.warn("api.network.intercept is not yet available to renderer plugins; use a main-scope plugin");
+          return () => {};
+        },
       }
     : {
         onRequest: () => {
           throw new Error(`Plugin ${id} lacks the "network" permission`);
         },
         onResponse: () => {
+          throw new Error(`Plugin ${id} lacks the "network" permission`);
+        },
+        intercept: () => {
           throw new Error(`Plugin ${id} lacks the "network" permission`);
         },
       };
