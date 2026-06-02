@@ -10,6 +10,8 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 
+import { createMainNetwork, type MainNetwork } from "./network";
+
 // Resolve user data paths from environment variables set by loader.
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -97,6 +99,23 @@ function getElectron(): typeof import("electron") {
     _electron = require("electron");
   }
   return _electron!;
+}
+
+// Single main-process network hub shared by all main-scope plugins, so each
+// gets a real, independently-removable subscription (Electron's webRequest
+// events only allow one listener each).
+let _mainNetwork: MainNetwork | null = null;
+
+function getMainNetwork(): MainNetwork {
+  if (!_mainNetwork) {
+    const electron = getElectron();
+    _mainNetwork = createMainNetwork(
+      () => electron.session.defaultSession,
+      () => electron.app.whenReady().then(() => undefined),
+      log,
+    );
+  }
+  return _mainNetwork;
 }
 
 // ── Preload Registration ─────────────────────────────────────────────────────
@@ -252,57 +271,7 @@ function createMainProcessAPI(manifest: import("@desktop-proxy/plugin-sdk").Plug
         return undefined as T;
       },
     },
-    network: {
-      onRequest: (handler) => {
-        // Network interception in main process can use session.webRequest
-        const filter = { urls: ["*://*/*"] };
-        const listener = (
-          details: Electron.OnBeforeRequestListenerDetails,
-          callback: (response: Electron.CallbackResponse) => void,
-        ) => {
-          const request = {
-            id: String(details.id),
-            method: details.method,
-            url: details.url,
-            // onBeforeRequest does not expose request headers; left empty here.
-            headers: {} as Record<string, string>,
-            body: details.uploadData ? String(details.uploadData) : null,
-            timestamp: Date.now(),
-            _type: "fetch" as const,
-          };
-          Promise.resolve(handler(request)).then((modified) => {
-            if (modified && modified !== request) {
-              callback({ redirectURL: modified.url });
-            } else {
-              callback({});
-            }
-          }).catch(() => callback({}));
-        };
-        electron.session.defaultSession.webRequest.onBeforeRequest(filter, listener);
-        return () => {
-          electron.session.defaultSession.webRequest.onBeforeRequest(filter, listener);
-          // Note: Electron doesn't have a simple removeListener for webRequest;
-          // this returns a no-op unsubscribe.
-        };
-      },
-      onResponse: (handler) => {
-        const filter = { urls: ["*://*/*"] };
-        const listener = (details: Electron.OnCompletedListenerDetails) => {
-          const response = {
-            id: String(details.id),
-            requestId: String(details.id),
-            status: details.statusCode,
-            statusText: details.statusLine.split(" ").slice(1).join(" ") || "",
-            headers: (details.responseHeaders as unknown as Record<string, string>) || {},
-            body: null,
-            timestamp: Date.now(),
-          };
-          handler(response);
-        };
-        electron.session.defaultSession.webRequest.onCompleted(filter, listener);
-        return () => {};
-      },
-    },
+    network: getMainNetwork(),
     app: {
       getInfo: async () => {
         return {

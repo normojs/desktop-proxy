@@ -344,9 +344,12 @@ For an alternative, file-free injection strategy (hooking the V8 compiler via
 ### Status / known gaps
 
 - No automated test suite yet.
-- The main-process `api.network` hooks are best-effort: Electron's `webRequest`
-  has no simple per-listener removal, so unsubscribe is effectively a no-op, and
-  `onBeforeRequest` cannot observe request headers.
+- Main-process `api.network` is backed by a shared `onBeforeSendHeaders` /
+  `onCompleted` hub on the default session: handlers see and may modify request
+  headers and have real, independently-removable subscriptions. Limitations:
+  response bodies are not available (Electron's `webRequest` does not expose
+  them) and request bodies are not captured in the main process — use a
+  renderer-scope plugin to observe bodies.
 
 ---
 
