@@ -147,6 +147,11 @@ node packages/installer/dist/cli.js <command> [options]
 | `repair` | 目标应用更新后重新打补丁。 |
 | `safe-mode [on\|off]` | 禁用所有插件运行应用（不带参数则切换）。 |
 | `logs [--follow] [--lines N]` | 打印（或实时跟随）runtime 日志。 |
+| `doctor [--json]` | 诊断安装状态（健康检查）。 |
+| `plugin list [--json]` | 列出已装插件及启用状态。 |
+| `plugin enable\|disable <id>` | 启用/禁用插件（app 运行时即时生效）。 |
+| `config get [key] [--json]` | 打印配置（或单个键）。 |
+| `config set <key> <value>` | 设置配置键（`logLevel`/`stealth`/`safeMode`/`autoUpdate`）。 |
 
 **选项**（用于 `install` / `repair`）：
 
@@ -157,8 +162,12 @@ node packages/installer/dist/cli.js <command> [options]
 | `--no-resign` | 跳过 macOS 重新签名。 |
 | `--follow, -f` | 跟随日志输出（logs 命令）。 |
 | `--lines <n>` | 打印行数（logs 命令，默认 200）。 |
+| `--json` | 机器可读输出（`doctor` / `plugin list` / `config get`）。 |
 | `--quiet` | 抑制进度输出。 |
 | `--verbose` | 显示详细输出。 |
+
+> 读取类命令支持 `--json`，便于其它工具或 AI 程序化驱动
+> （如 `doctor --json`、`plugin list --json`、`config get logLevel --json`）。
 
 **示例**
 
@@ -343,6 +352,17 @@ await api.cdp.onRequestPaused((req, ctl) => {
 CDP 能力很强（可完整查看/控制页面），因此用 manifest 权限门控。渲染进程的 `api.cdp`
 限定在插件自身的 webContents；对**主进程插件**则指向聚焦窗口（或第一个可用窗口）。
 如果该窗口已打开 DevTools，`attach()` 会失败。
+
+### 管理框架
+
+框架有两种驱动方式，背后都是同一个 `~/.desktop-proxy/config.json`：
+
+- **应用内管理页**：浮层里内置的「desktop-proxy」页（与插件页并列），可开关插件、
+  切 safe-mode、调日志等级、切 stealth。
+- **CLI**：`plugin enable/disable`、`config get/set`、`doctor`（适合脚本/AI，带 `--json`）。
+
+runtime 会**监听 `config.json`** 并即时生效：日志等级立即更新；插件启停或 safe-mode
+变更会重载渲染层插件。（stealth 变更需重启，因为 hook 在 preload 阶段就已安装。）
 
 ---
 

@@ -463,6 +463,17 @@ function setupIPCBridge(): void {
     return { safeMode: enabled };
   });
 
+  // Merge a partial config (used by the in-app management page). The config
+  // watcher then applies it live (log level immediately; plugins/safeMode reload).
+  electron.ipcMain.handle(ch("set-config"), async (_e, patch: Record<string, unknown>) => {
+    const cfg = readConfig() as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patch ?? {})) {
+      cfg[key] = value;
+    }
+    writeConfig(cfg as Config);
+    return { ok: true };
+  });
+
   // App info
   electron.ipcMain.handle(ch("app-info"), async () => ({
     name: electron.app.getName(),
@@ -558,26 +569,66 @@ function setupIPCBridge(): void {
   );
 }
 
-// ── FS Watcher (Hot Reload) ──────────────────────────────────────────────────
+// ── Watchers (Hot Reload + live config) ──────────────────────────────────────
+
+function broadcastToRenderers(channel: string, ...args: unknown[]): void {
+  getElectron()
+    .BrowserWindow.getAllWindows()
+    .filter((w) => !w.isDestroyed())
+    .forEach((w) => w.webContents.send(channel, ...args));
+}
 
 function startFSWatcher(): void {
   try {
-    const electron = getElectron();
-    // Use Node.js fs.watch to monitor plugins directory
-    fs.watch(PLUGINS_DIR, { recursive: true }, (_eventType, _filename) => {
-      // Debounce: wait 500ms before broadcasting reload
+    // Use Node.js fs.watch to monitor the plugins directory.
+    fs.watch(PLUGINS_DIR, { recursive: true }, () => {
+      // Debounce: wait 500ms before broadcasting reload.
       setTimeout(() => {
         log("info", "Plugin files changed; broadcasting reload");
-        electron.BrowserWindow.getAllWindows()
-          .filter((w) => !w.isDestroyed())
-          .forEach((w) => {
-            w.webContents.send(ch("plugins-changed"));
-          });
+        broadcastToRenderers(ch("plugins-changed"));
       }, 500);
     });
     log("info", "FS watcher started on:", PLUGINS_DIR);
   } catch (e) {
     log("warn", "FS watcher failed to start:", String(e));
+  }
+}
+
+// Watch config.json so changes from the CLI (or the in-app management page)
+// apply live: log level updates immediately; plugin enable/disable and
+// safe-mode changes trigger a renderer plugin reload.
+function startConfigWatcher(): void {
+  let lastPlugins = JSON.stringify(readConfig().plugins ?? {});
+  let lastSafeMode = readConfig().safeMode === true;
+  let timer: NodeJS.Timeout | null = null;
+
+  try {
+    fs.watch(userRoot, (_event, filename) => {
+      if (filename !== "config.json") return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        const cfg = readConfig();
+
+        const level = parseLevel(process.env.DESKTOP_PROXY_LOG_LEVEL ?? cfg.logLevel, "info");
+        if (level !== rootLogger.getLevel()) {
+          rootLogger.setLevel(level);
+          log("info", `config: logLevel → ${level}`);
+        }
+        broadcastToRenderers(ch("config-changed"), { logLevel: rootLogger.getLevel() });
+
+        const plugins = JSON.stringify(cfg.plugins ?? {});
+        const safeMode = cfg.safeMode === true;
+        if (plugins !== lastPlugins || safeMode !== lastSafeMode) {
+          lastPlugins = plugins;
+          lastSafeMode = safeMode;
+          log("info", "config: plugins/safeMode changed; broadcasting reload");
+          broadcastToRenderers(ch("plugins-changed"));
+        }
+      }, 250);
+    });
+    log("info", "config watcher started on:", CONFIG_FILE);
+  } catch (e) {
+    log("warn", "config watcher failed to start:", String(e));
   }
 }
 
@@ -637,8 +688,9 @@ if (!isSafeModeEnabled()) {
   loadMainProcessPlugins();
 }
 
-// Start file system watcher for hot reload
+// Start watchers: plugin files (hot reload) + config.json (live settings)
 startFSWatcher();
+startConfigWatcher();
 
 // Cleanup on quit
 electron.app.on("will-quit", () => {

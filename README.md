@@ -153,16 +153,28 @@ node packages/installer/dist/cli.js <command> [options]
 | `repair` | Re-apply patches after the target app updates. |
 | `safe-mode [on\|off]` | Run the app with all plugins disabled (toggles if no value given). |
 | `logs [--follow] [--lines N]` | Print (or live-tail) the runtime log. |
+| `doctor [--json]` | Diagnose the installation (health checks). |
+| `plugin list [--json]` | List installed plugins and their enabled state. |
+| `plugin enable\|disable <id>` | Enable/disable a plugin (applied live if the app is running). |
+| `config get [key] [--json]` | Print the config (or a single key). |
+| `config set <key> <value>` | Set a config key (`logLevel`, `stealth`, `safeMode`, `autoUpdate`). |
 
-**Options** (for `install` / `repair`):
+**Options:**
 
 | Option | Effect |
 |---|---|
-| `--app <path>` | Path to the `.app` bundle (auto-detected if omitted). |
-| `--no-fuse` | Skip Electron fuse flipping. |
-| `--no-resign` | Skip macOS code re-signing. |
+| `--app <path>` | Path to the `.app` bundle (`install` / `repair`; auto-detected if omitted). |
+| `--no-fuse` | Skip Electron fuse flipping (`install` / `repair`). |
+| `--no-resign` | Skip macOS code re-signing (`install` / `repair`). |
+| `--follow, -f` | Follow the log output (`logs`). |
+| `--lines <n>` | Number of lines to print (`logs`, default 200). |
+| `--json` | Machine-readable output for `doctor` / `plugin list` / `config get`. |
 | `--quiet` | Suppress progress output. |
 | `--verbose` | Show detailed output. |
+
+> The read commands support `--json`, so other tools or agents can drive
+> desktop-proxy programmatically (e.g. `doctor --json`, `plugin list --json`,
+> `config get logLevel --json`).
 
 **Examples**
 
@@ -353,6 +365,21 @@ CDP is powerful (full page inspection/control), so it is gated behind the
 manifest permission. The renderer's `api.cdp` is confined to the plugin's own
 webContents; for **main-process plugins** it targets the focused window (or the
 first available one). `attach()` fails if DevTools is already open on that window.
+
+### Managing the framework
+
+The framework can be driven two ways, both backed by the same
+`~/.desktop-proxy/config.json`:
+
+- **In-app management page** — a built-in "desktop-proxy" page in the overlay
+  (alongside plugin pages) to toggle plugins, safe mode, log level, and stealth.
+- **CLI** — `plugin enable/disable`, `config get/set`, `doctor` (great for
+  scripts/agents, with `--json`).
+
+The runtime **watches `config.json`** and applies changes live: the log level
+updates immediately, and plugin enable/disable or safe-mode changes reload the
+renderer plugins. (Stealth changes need a restart, since the hooks are installed
+at preload time.)
 
 ---
 

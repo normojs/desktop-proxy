@@ -18,6 +18,7 @@ import { installReactHook } from "./react-hook";
 import { installNetworkInterceptor } from "./network-interceptor";
 import { startPluginHost, teardownPluginHost, setSettingsCallbacks, setLogLevel } from "./plugin-host";
 import { installSettingsOverlay, type SettingsOverlayHandle } from "./settings-overlay";
+import { registerManagementPage } from "./management-page";
 
 // ── Electron IPC ─────────────────────────────────────────────────────────────
 // In a sandboxed preload context, we can still require("electron") to get ipcRenderer.
@@ -100,6 +101,7 @@ function boot(): void {
     if (!overlay) {
       overlay = installSettingsOverlay({ stealth });
       setSettingsCallbacks(overlay.registerSection, overlay.registerPage);
+      registerManagementPage(overlay, getIpcRenderer());
       fileLog("settings overlay installed");
     }
   } catch (e) {
@@ -119,6 +121,15 @@ if (document.readyState === "loading") {
 // Step 4: Hot reload support — listen for plugin changes from main process.
 let reloading: Promise<void> | null = null;
 
+// Live log-level updates from the main process (CLI/GUI config changes).
+getIpcRenderer().on(ch("config-changed"), (_e: unknown, payload: { logLevel?: string }) => {
+  if (payload?.logLevel) {
+    activeLogLevel = payload.logLevel;
+    setLogLevel(payload.logLevel);
+    fileLog("config-changed", { logLevel: payload.logLevel });
+  }
+});
+
 getIpcRenderer().on(ch("plugins-changed"), () => {
   if (reloading) return;
   reloading = (async () => {
@@ -126,6 +137,8 @@ getIpcRenderer().on(ch("plugins-changed"), () => {
       fileLog("hot-reloading plugins");
       await teardownPluginHost();
       overlay?.clearAll();
+      // Re-add the framework page that clearAll() removed alongside plugin pages.
+      if (overlay) registerManagementPage(overlay, getIpcRenderer());
       await startPluginHost();
       fileLog("hot-reload complete");
     } catch (e) {
