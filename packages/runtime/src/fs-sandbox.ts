@@ -19,8 +19,10 @@ import type { PluginFileStat, FileEncoding } from "@desktop-proxy/plugin-sdk";
 
 /** Resolve the sandbox root directory for a plugin id. */
 export function pluginDataDir(userRoot: string, pluginId: string): string {
-  // Collapse the id into a single safe path segment.
-  const safeId = pluginId.replace(/[^a-zA-Z0-9._-]/g, "_") || "_";
+  // Collapse the id into a single safe path segment. Guard against an all-dots
+  // segment ("." / ".."), which would otherwise climb out of plugin-data.
+  let safeId = pluginId.replace(/[^a-zA-Z0-9._-]/g, "_") || "_";
+  if (/^\.+$/.test(safeId)) safeId = `_${safeId}`;
   return path.join(userRoot, "plugin-data", safeId);
 }
 

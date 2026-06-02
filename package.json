@@ -12,9 +12,14 @@
     "build:plugin-sdk": "pnpm --filter @desktop-proxy/plugin-sdk build",
     "dev": "pnpm -r dev",
     "clean": "pnpm -r clean",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
   }
 }

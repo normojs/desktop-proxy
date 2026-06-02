@@ -126,6 +126,8 @@ Other workspace scripts:
 
 ```bash
 pnpm typecheck   # tsc --noEmit across all packages
+pnpm test        # run the Vitest suite
+pnpm test:watch  # Vitest in watch mode
 pnpm dev         # tsc --watch across all packages
 pnpm clean       # remove dist/ in every package
 ```
@@ -459,9 +461,23 @@ For an alternative, file-free injection strategy (hooking the V8 compiler via
 - `plugin-sdk` is DOM-typed (it references `HTMLElement` for settings rendering)
   and intentionally has no Node types.
 
+### Testing
+
+A [Vitest](https://vitest.dev) suite (`pnpm test`) covers the pure, host-free
+logic — the highest-risk parts that are hard to eyeball:
+
+- `plugin-sdk`: `validateManifest`, `isLevelEnabled`, and the `createCDP`
+  helper wiring (Network/Fetch/evaluate against a mock core).
+- `runtime`: the leveled `logger` (filtering, `setLevel`, namespaces, size cap)
+  and the `fs-sandbox` path confinement + read/write round-trips.
+- `installer`: `fuses` read/write against a synthetic Electron binary buffer.
+
+Tests live in each package's `test/` directory (excluded from the `tsc` build).
+Electron/DOM-dependent code (sessions, `webContents.debugger`, the overlay) is
+not unit-tested here.
+
 ### Status / known gaps
 
-- No automated test suite yet.
 - Main-process `api.network` is backed by a shared `onBeforeSendHeaders` /
   `onCompleted` hub on the default session: handlers see and may modify request
   headers and have real, independently-removable subscriptions. Limitations:

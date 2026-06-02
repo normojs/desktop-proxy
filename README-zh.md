@@ -120,6 +120,8 @@ pnpm build:plugin-sdk
 
 ```bash
 pnpm typecheck   # 对所有包执行 tsc --noEmit
+pnpm test        # 运行 Vitest 测试套件
+pnpm test:watch  # Vitest 监听模式
 pnpm dev         # 对所有包执行 tsc --watch
 pnpm clean       # 删除每个包的 dist/
 ```
@@ -439,9 +441,22 @@ DESKTOP_PROXY_LOG_LEVEL=debug   # debug | info | warn | error | silent
 - `runtime` 与 `preload` 在运行时从目标应用解析 Electron；`electron` 依赖**仅用于类型**。
 - `plugin-sdk` 带 DOM 类型（设置渲染用到 `HTMLElement`），且刻意不含 Node 类型。
 
+### 测试
+
+一套 [Vitest](https://vitest.dev) 测试（`pnpm test`）覆盖了不依赖宿主环境的纯逻辑
+（也是最难肉眼检查、最易出错的部分）：
+
+- `plugin-sdk`：`validateManifest`、`isLevelEnabled`，以及 `createCDP` 的封装接线
+  （用 mock core 测 Network/Fetch/evaluate）。
+- `runtime`：分级 `logger`（过滤、`setLevel`、命名空间、限大小）与 `fs-sandbox` 的
+  路径限定 + 读写往返。
+- `installer`：`fuses` 针对合成的 Electron 二进制缓冲区做读/写测试。
+
+测试位于各包的 `test/` 目录（已排除在 `tsc` 构建之外）。依赖 Electron/DOM 的代码
+（session、`webContents.debugger`、overlay）未做单测。
+
 ### 状态 / 已知缺口
 
-- 暂无自动化测试。
 - 主进程 `api.network` 由默认 session 上共享的 `onBeforeSendHeaders` /
   `onCompleted` hub 支撑：handler 可读取并修改请求头，且拥有真实的、可独立取消的订阅。
   限制：响应体不可得（Electron `webRequest` 不暴露），且主进程不捕获请求体——
