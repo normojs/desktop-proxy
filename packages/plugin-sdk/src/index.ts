@@ -332,6 +332,22 @@ export interface PluginApp {
   getWindows(): Promise<WindowInfo[]>;
 }
 
+// ── UI helpers ───────────────────────────────────────────────────────────────
+
+export interface ToastOptions {
+  /** Auto-dismiss delay in milliseconds (default 3000). */
+  durationMs?: number;
+  type?: "info" | "success" | "error";
+}
+
+/** Small DOM conveniences for renderer plugins. */
+export interface PluginUI {
+  /** Inject a stylesheet into the page; returns a remover. */
+  injectCSS(css: string): UnsubscribeFn;
+  /** Show a transient notification in a host-isolated overlay. */
+  toast(message: string, options?: ToastOptions): void;
+}
+
 // ── Full Plugin API ──────────────────────────────────────────────────────────
 
 export interface PluginAPI {
@@ -346,6 +362,7 @@ export interface PluginAPI {
   network: PluginNetwork;
   fs: PluginFS;
   cdp: PluginCDP;
+  ui: PluginUI;
   app: PluginApp;
 }
 
@@ -354,6 +371,36 @@ export interface PluginAPI {
 export interface PluginModule {
   start(api: PluginAPI): void | Promise<void>;
   stop?(): void | Promise<void>;
+}
+
+// ── Versioning ───────────────────────────────────────────────────────────────
+
+/** Normalize a version/tag (`v1.2.3-beta+1` → `1.2.3`) to its numeric core. */
+function normalizeVersion(v: string): number[] {
+  return v
+    .trim()
+    .replace(/^v/i, "")
+    .split(/[-+]/)[0]
+    .split(".")
+    .map((n) => parseInt(n, 10) || 0);
+}
+
+/** Compare two semver-ish versions: -1 if a<b, 0 if equal, 1 if a>b. */
+export function compareVersions(a: string, b: string): number {
+  const pa = normalizeVersion(a);
+  const pb = normalizeVersion(b);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+/** True if `version` is >= `min` (or `min` is unset). */
+export function satisfiesMinVersion(version: string, min: string | undefined): boolean {
+  if (!min) return true;
+  return compareVersions(version, min) >= 0;
 }
 
 // ── Validation ───────────────────────────────────────────────────────────────

@@ -150,6 +150,7 @@ node packages/installer/dist/cli.js <command> [options]
 | `doctor [--json]` | 诊断安装状态（健康检查）。 |
 | `plugin list [--json]` | 列出已装插件及启用状态。 |
 | `plugin enable\|disable <id>` | 启用/禁用插件（app 运行时即时生效）。 |
+| `plugin check-updates [--json]` | 检查各插件 `githubRepo` 是否有新版本。 |
 | `config get [key] [--json]` | 打印配置（或单个键）。 |
 | `config set <key> <value>` | 设置配置键（`logLevel`/`stealth`/`safeMode`/`autoUpdate`）。 |
 | `watch install\|uninstall\|status` | app 更新后自动重打补丁（macOS）。 |
@@ -258,8 +259,12 @@ node packages/installer/dist/cli.js validate-plugin ./my-plugin
 | `author` | 否 | 作者名。 |
 | `iconUrl` | 否 | `data:` 或 `https:` 图标 URL。 |
 | `githubRepo` | 否 | 用于更新检查的 `owner/repo`。 |
-| `minDesktopProxyVersion` | 否 | 所需的最低框架版本。 |
-| `permissions` | 否 | 申请的能力（如 `["cdp"]`），用于门控强力 API。 |
+| `minDesktopProxyVersion` | 否 | 所需的最低框架版本（不兼容的插件会被跳过）。 |
+| `permissions` | 否 | 使用的能力：`cdp`（始终必需）、`fs` / `network`（见下）。 |
+
+> **权限**：`api.cdp` 始终需要 `cdp` 权限。`api.fs` 与 `api.network` 默认开放，但未声明
+> 就使用会打一次警告；设 `enforcePermissions`（`config set enforcePermissions true`）
+> 可改为「未声明即拒绝」。
 
 **`index.js`**（CommonJS 模块形态）
 
@@ -310,6 +315,7 @@ module.exports = {
 | `api.network` | `onRequest` / `onResponse` 拦截钩子。 |
 | `api.fs` | 限定在插件数据目录内的沙盒文件 I/O：`read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat`（utf8 或 base64）。 |
 | `api.cdp` | Chrome DevTools Protocol：`attach`/`send`/`on`/`evaluate`，外加 `onResponse`/`onRequestPaused` 便捷封装。渲染进程指向自身 webContents；主进程指向聚焦窗口。需要 `"cdp"` 权限。 |
+| `api.ui` | DOM 辅助：`injectCSS()`（返回移除函数）与 `toast()`（宿主隔离的通知）。 |
 | `api.app` | `getInfo()` 与 `getWindows()`。 |
 
 ### 示例：内置的 request interceptor

@@ -11,7 +11,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { randomBytes } from "node:crypto";
 
-import { createCDP } from "@desktop-proxy/plugin-sdk";
+import { createCDP, satisfiesMinVersion } from "@desktop-proxy/plugin-sdk";
 import type { PluginCDPCore } from "@desktop-proxy/plugin-sdk";
 
 import { createMainNetwork, type MainNetwork } from "./network";
@@ -39,6 +39,9 @@ function requireEnv(name: string): string {
 
 const userRoot = requireEnv("DESKTOP_PROXY_USER_ROOT");
 const runtimeDir = requireEnv("DESKTOP_PROXY_RUNTIME");
+
+/** Framework version, used to enforce a plugin's minDesktopProxyVersion. */
+const FRAMEWORK_VERSION = "0.1.0";
 
 const PRELOAD_PATH = path.resolve(runtimeDir, "preload.js");
 const PLUGINS_DIR = path.join(userRoot, "plugins");
@@ -75,6 +78,8 @@ interface Config {
   stealth?: boolean;
   /** Minimum log level: "debug" | "info" | "warn" | "error" | "silent". */
   logLevel?: string;
+  /** When true, plugins must declare fs/network permissions to use those APIs. */
+  enforcePermissions?: boolean;
   plugins?: Record<string, { enabled: boolean }>;
 }
 
@@ -280,6 +285,10 @@ function loadMainProcessPlugins(): void {
     const { manifest, entry } = plugin;
     if (manifest.scope !== "main" && manifest.scope !== "both") continue;
     if (!isPluginEnabled(manifest.id)) continue;
+    if (!satisfiesMinVersion(FRAMEWORK_VERSION, manifest.minDesktopProxyVersion)) {
+      log("warn", `Plugin ${manifest.id} needs desktop-proxy >= ${manifest.minDesktopProxyVersion} (have ${FRAMEWORK_VERSION}); skipping`);
+      continue;
+    }
     if (!fs.existsSync(entry)) {
       log("warn", `Plugin ${manifest.id} entry not found: ${entry}`);
       continue;
@@ -380,6 +389,11 @@ function createMainProcessAPI(manifest: import("@desktop-proxy/plugin-sdk").Plug
       };
     })(),
     cdp: createCDP(createMainCDPCore(manifest)),
+    // UI helpers are renderer-only; main-process plugins get safe no-ops.
+    ui: {
+      injectCSS: () => () => {},
+      toast: () => log("warn", `[${manifest.id}] ui.toast is not available in the main process`),
+    },
     app: {
       getInfo: async () => {
         return {
@@ -428,6 +442,7 @@ function setupIPCBridge(): void {
       entry: p.entry,
       dir: p.dir,
       enabled: isPluginEnabled(p.manifest.id),
+      compatible: satisfiesMinVersion(FRAMEWORK_VERSION, p.manifest.minDesktopProxyVersion),
     }));
   });
 
@@ -441,7 +456,7 @@ function setupIPCBridge(): void {
   // Config read
   electron.ipcMain.handle(ch("get-config"), async () => ({
     ...readConfig(),
-    version: "0.1.0",
+    version: FRAMEWORK_VERSION,
   }));
 
   // Toggle plugin enabled state
@@ -509,6 +524,7 @@ function setupIPCBridge(): void {
       stealth: isStealthEnabled(),
       logLevel: rootLogger.getLevel(),
       channelPrefix: CHANNEL_PREFIX,
+      enforcePermissions: readConfig().enforcePermissions === true,
     };
   });
 

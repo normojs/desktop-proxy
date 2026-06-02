@@ -156,6 +156,7 @@ node packages/installer/dist/cli.js <command> [options]
 | `doctor [--json]` | Diagnose the installation (health checks). |
 | `plugin list [--json]` | List installed plugins and their enabled state. |
 | `plugin enable\|disable <id>` | Enable/disable a plugin (applied live if the app is running). |
+| `plugin check-updates [--json]` | Check each plugin's `githubRepo` for a newer release. |
 | `config get [key] [--json]` | Print the config (or a single key). |
 | `config set <key> <value>` | Set a config key (`logLevel`, `stealth`, `safeMode`, `autoUpdate`). |
 | `watch install\|uninstall\|status` | Auto re-apply the patch when the app updates (macOS). |
@@ -266,8 +267,13 @@ node packages/installer/dist/cli.js validate-plugin ./my-plugin
 | `author` | no | Author name. |
 | `iconUrl` | no | `data:` or `https:` icon URL. |
 | `githubRepo` | no | `owner/repo` for update checks. |
-| `minDesktopProxyVersion` | no | Minimum framework version. |
-| `permissions` | no | Requested capabilities (e.g. `["cdp"]`) that gate powerful APIs. |
+| `minDesktopProxyVersion` | no | Minimum framework version (incompatible plugins are skipped). |
+| `permissions` | no | Capabilities used: `cdp` (always required), `fs` / `network` (see below). |
+
+> **Permissions:** `api.cdp` always requires the `cdp` permission. `api.fs` and
+> `api.network` are open by default but log a one-time warning when used without
+> being declared; set `enforcePermissions` (`config set enforcePermissions true`)
+> to deny undeclared use instead.
 
 **`index.js`** (CommonJS module shape)
 
@@ -319,6 +325,7 @@ re-runs renderer plugins when files change.
 | `api.network` | `onRequest` / `onResponse` interception hooks. |
 | `api.fs` | Sandboxed file I/O confined to the plugin's data dir: `read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat` (utf8 or base64). |
 | `api.cdp` | Chrome DevTools Protocol: `attach`/`send`/`on`/`evaluate` plus `onResponse`/`onRequestPaused` helpers. Renderer targets its own webContents; main targets the focused window. Requires the `"cdp"` permission. |
+| `api.ui` | DOM helpers: `injectCSS()` (returns a remover) and `toast()` (host-isolated notification). |
 | `api.app` | `getInfo()` and `getWindows()`. |
 
 ### Example: the bundled request interceptor

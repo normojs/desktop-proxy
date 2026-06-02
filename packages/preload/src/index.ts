@@ -16,7 +16,7 @@ import { isLevelEnabled } from "@desktop-proxy/plugin-sdk";
 import { ch, setChannelPrefix } from "./channels";
 import { installReactHook } from "./react-hook";
 import { installNetworkInterceptor } from "./network-interceptor";
-import { startPluginHost, teardownPluginHost, setSettingsCallbacks, setLogLevel } from "./plugin-host";
+import { startPluginHost, teardownPluginHost, setSettingsCallbacks, setLogLevel, setEnforcePermissions } from "./plugin-host";
 import { installSettingsOverlay, type SettingsOverlayHandle } from "./settings-overlay";
 import { registerManagementPage } from "./management-page";
 
@@ -50,27 +50,34 @@ function fileLog(stage: string, extra?: unknown): void {
  * Read framework config synchronously. The hooks below run before any page code,
  * so we cannot wait on an async IPC round-trip here.
  */
-function readConfigSync(): { stealth: boolean; logLevel: string; channelPrefix: string } {
+function readConfigSync(): {
+  stealth: boolean;
+  logLevel: string;
+  channelPrefix: string;
+  enforcePermissions: boolean;
+} {
   try {
     const cfg = getIpcRenderer().sendSync("desktop-proxy:config-sync") as
-      | { stealth?: boolean; logLevel?: string; channelPrefix?: string }
+      | { stealth?: boolean; logLevel?: string; channelPrefix?: string; enforcePermissions?: boolean }
       | undefined;
     return {
       stealth: cfg?.stealth === true,
       logLevel: cfg?.logLevel ?? "info",
       channelPrefix: cfg?.channelPrefix ?? "desktop-proxy",
+      enforcePermissions: cfg?.enforcePermissions === true,
     };
   } catch {
-    return { stealth: false, logLevel: "info", channelPrefix: "desktop-proxy" };
+    return { stealth: false, logLevel: "info", channelPrefix: "desktop-proxy", enforcePermissions: false };
   }
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
-const { stealth, logLevel, channelPrefix } = readConfigSync();
+const { stealth, logLevel, channelPrefix, enforcePermissions } = readConfigSync();
 setChannelPrefix(channelPrefix);
 activeLogLevel = logLevel;
 setLogLevel(logLevel);
+setEnforcePermissions(enforcePermissions);
 fileLog("preload entry", { url: window.location.href, stealth, logLevel, channelPrefix });
 
 // Step 1: Install React hook BEFORE the app's JS bundle runs.

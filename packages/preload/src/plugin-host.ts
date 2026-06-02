@@ -30,6 +30,7 @@ import type { IpcRenderer, IpcRendererEvent } from "electron";
 import { ch } from "./channels";
 import { fiberForNode } from "./react-hook";
 import { onRequest, onResponse } from "./network-interceptor";
+import { createUiApi } from "./ui";
 
 // ── IPC Renderer utilities (preload has access to ipcRenderer via require("electron")) ──
 
@@ -58,6 +59,35 @@ let currentLogLevel = "info";
 
 export function setLogLevel(level: string): void {
   currentLogLevel = level || "info";
+}
+
+// When enforcement is on, plugins must declare fs/network permissions to use
+// those APIs; otherwise undeclared use is allowed with a one-time warning.
+let enforcePermissions = false;
+const warnedPermissions = new Set<string>();
+
+export function setEnforcePermissions(value: boolean): void {
+  enforcePermissions = value;
+}
+
+/** Returns true if the plugin may use `perm`. Throws (enforce) or warns once. */
+function allowPermission(manifest: PluginManifest, perm: string): boolean {
+  if (manifest.permissions?.includes(perm)) return true;
+  if (enforcePermissions) return false;
+  const key = `${manifest.id}:${perm}`;
+  if (!warnedPermissions.has(key)) {
+    warnedPermissions.add(key);
+    try {
+      getIpcRenderer().send(
+        ch("preload-log"),
+        "warn",
+        `Plugin ${manifest.id} uses api.${perm} without declaring "${perm}" in manifest.permissions`,
+      );
+    } catch {
+      // best effort
+    }
+  }
+  return true;
 }
 
 // Registers from settings-injector (set by caller)
@@ -183,20 +213,40 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
     },
   };
 
-  const network: PluginNetwork = {
-    onRequest: (handler) => onRequest(handler),
-    onResponse: (handler) => onResponse(handler),
-  };
+  const network: PluginNetwork = allowPermission(manifest, "network")
+    ? {
+        onRequest: (handler) => onRequest(handler),
+        onResponse: (handler) => onResponse(handler),
+      }
+    : {
+        onRequest: () => {
+          throw new Error(`Plugin ${id} lacks the "network" permission`);
+        },
+        onResponse: () => {
+          throw new Error(`Plugin ${id} lacks the "network" permission`);
+        },
+      };
 
-  const fsApi: PluginFS = {
-    read: (p, encoding) => ipc.invoke(ch("fs:read"), id, p, encoding),
-    write: (p, data, encoding) => ipc.invoke(ch("fs:write"), id, p, data, encoding),
-    exists: (p) => ipc.invoke(ch("fs:exists"), id, p),
-    list: (p) => ipc.invoke(ch("fs:list"), id, p),
-    delete: (p) => ipc.invoke(ch("fs:delete"), id, p),
-    mkdir: (p) => ipc.invoke(ch("fs:mkdir"), id, p),
-    stat: (p) => ipc.invoke(ch("fs:stat"), id, p),
-  };
+  const denyFs = () => Promise.reject(new Error(`Plugin ${id} lacks the "fs" permission`));
+  const fsApi: PluginFS = allowPermission(manifest, "fs")
+    ? {
+        read: (p, encoding) => ipc.invoke(ch("fs:read"), id, p, encoding),
+        write: (p, data, encoding) => ipc.invoke(ch("fs:write"), id, p, data, encoding),
+        exists: (p) => ipc.invoke(ch("fs:exists"), id, p),
+        list: (p) => ipc.invoke(ch("fs:list"), id, p),
+        delete: (p) => ipc.invoke(ch("fs:delete"), id, p),
+        mkdir: (p) => ipc.invoke(ch("fs:mkdir"), id, p),
+        stat: (p) => ipc.invoke(ch("fs:stat"), id, p),
+      }
+    : {
+        read: denyFs,
+        write: denyFs,
+        exists: denyFs,
+        list: denyFs,
+        delete: denyFs,
+        mkdir: denyFs,
+        stat: denyFs,
+      };
 
   const cdp = createCDP(createRendererCDPCore(id, manifest, ipc));
 
@@ -216,6 +266,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
     network,
     fs: fsApi,
     cdp,
+    ui: createUiApi(),
     app,
   };
 }
@@ -291,11 +342,16 @@ export async function startPluginHost(): Promise<void> {
     entry: string;
     dir: string;
     enabled: boolean;
+    compatible?: boolean;
   }> = await ipc.invoke(ch("list-plugins"));
 
   for (const plugin of plugins) {
     if (plugin.manifest.scope === "main") continue; // main-only, skip
     if (!plugin.enabled) continue;
+    if (plugin.compatible === false) {
+      ipc.send(ch("preload-log"), "warn", `Plugin ${plugin.manifest.id} requires a newer desktop-proxy; skipping`);
+      continue;
+    }
 
     try {
       const source: string = await ipc.invoke(ch("read-plugin-source"), plugin.entry);

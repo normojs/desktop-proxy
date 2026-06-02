@@ -18,7 +18,7 @@ import {
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-import { validateManifest } from "@desktop-proxy/plugin-sdk";
+import { validateManifest, compareVersions } from "@desktop-proxy/plugin-sdk";
 
 import { locateApp } from "../platform.js";
 import { readFileInAsar } from "../asar.js";
@@ -59,6 +59,7 @@ interface PluginInfo {
   scope: string;
   enabled: boolean;
   dir: string;
+  githubRepo?: string;
 }
 
 function listPluginInfo(): PluginInfo[] {
@@ -85,6 +86,7 @@ function listPluginInfo(): PluginInfo[] {
         scope: manifest.scope,
         enabled: cfg.plugins?.[manifest.id]?.enabled !== false,
         dir,
+        githubRepo: manifest.githubRepo,
       });
     } catch {
       // skip unreadable plugin
@@ -128,6 +130,54 @@ export function pluginSetEnabled(id: string, enabled: boolean, json = false): vo
     console.log(`\n  Plugin ${id} ${enabled ? "enabled" : "disabled"}.`);
     console.log("  Applied live if the app is running; otherwise on next launch.\n");
   }
+}
+
+async function latestRelease(repo: string): Promise<string | null> {
+  const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+    headers: { Accept: "application/vnd.github+json", "User-Agent": "desktop-proxy" },
+  });
+  if (res.status === 404) return null; // no published releases
+  if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+  const data = (await res.json()) as { tag_name?: string; name?: string };
+  return data.tag_name ?? data.name ?? null;
+}
+
+export async function pluginCheckUpdates(json = false): Promise<void> {
+  const plugins = listPluginInfo().filter((p) => p.githubRepo);
+  if (plugins.length === 0) {
+    if (json) console.log("[]");
+    else console.log("\n  No plugins declare a githubRepo to check.\n");
+    return;
+  }
+
+  const results = await Promise.all(
+    plugins.map(async (p) => {
+      try {
+        const latest = await latestRelease(p.githubRepo as string);
+        return {
+          id: p.id,
+          repo: p.githubRepo,
+          current: p.version,
+          latest,
+          updateAvailable: latest ? compareVersions(latest, p.version) > 0 : false,
+        };
+      } catch (e) {
+        return { id: p.id, repo: p.githubRepo, current: p.version, latest: null, updateAvailable: false, error: String(e) };
+      }
+    }),
+  );
+
+  if (json) {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+  console.log("");
+  for (const r of results) {
+    if ("error" in r && r.error) console.log(`  ? ${r.id}: check failed (${r.error})`);
+    else if (r.updateAvailable) console.log(`  ↑ ${r.id}: ${r.current} → ${r.latest}  (${r.repo})`);
+    else console.log(`  ✓ ${r.id}: up to date (${r.current})`);
+  }
+  console.log("");
 }
 
 // ── config ───────────────────────────────────────────────────────────────────

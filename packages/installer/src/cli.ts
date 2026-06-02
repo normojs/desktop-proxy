@@ -22,7 +22,7 @@ import { uninstall } from "./commands/uninstall.js";
 import { status } from "./commands/status.js";
 import { repair } from "./commands/repair.js";
 import { logs } from "./commands/logs.js";
-import { pluginList, pluginSetEnabled, configGet, configSet, doctor } from "./commands/manage.js";
+import { pluginList, pluginSetEnabled, configGet, configSet, doctor, pluginCheckUpdates } from "./commands/manage.js";
 import { installWatcher, uninstallWatcher, watcherStatus } from "./commands/watch.js";
 import { createPlugin, validatePlugin } from "./commands/scaffold.js";
 
@@ -41,6 +41,7 @@ Usage:
   desktop-proxy plugin list [--json]  List installed plugins and their state
   desktop-proxy plugin enable <id>    Enable a plugin
   desktop-proxy plugin disable <id>   Disable a plugin
+  desktop-proxy plugin check-updates  Check plugins' githubRepo for newer releases
   desktop-proxy config get [key]      Print config (or a single key)
   desktop-proxy config set <key> <v>  Set a config key (logLevel, stealth, safeMode, autoUpdate)
   desktop-proxy watch install         Auto re-apply the patch when the app updates (macOS)
@@ -192,8 +193,10 @@ async function main(): Promise<void> {
         pluginSetEnabled(positionals[2], true, json);
       } else if (sub === "disable") {
         pluginSetEnabled(positionals[2], false, json);
+      } else if (sub === "check-updates") {
+        await pluginCheckUpdates(json);
       } else {
-        console.error(`Unknown plugin subcommand: ${sub ?? "(none)"}. Use: list | enable <id> | disable <id>`);
+        console.error(`Unknown plugin subcommand: ${sub ?? "(none)"}. Use: list | enable <id> | disable <id> | check-updates`);
         process.exit(1);
       }
       break;
