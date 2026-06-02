@@ -1,0 +1,25 @@
+{
+  "name": "@desktop-proxy/installer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CLI tool for patching/unpatching Electron apps with the desktop-proxy injection framework",
+  "main": "dist/cli.js",
+  "bin": {
+    "desktop-proxy": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@electron/asar": "^4.2",
+    "@desktop-proxy/plugin-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^6.0"
+  }
+}

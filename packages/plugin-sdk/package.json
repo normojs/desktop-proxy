@@ -1,0 +1,17 @@
+{
+  "name": "@desktop-proxy/plugin-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plugin development kit — TypeScript types and validators for desktop-proxy plugins",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^6.0"
+  }
+}

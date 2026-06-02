@@ -1,0 +1,10 @@
+{
+  "name": "@desktop-proxy/loader",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal loader injected into target app.asar — chains to original main entry after booting runtime",
+  "scripts": {
+    "build": "mkdir -p dist && cp src/loader.cjs dist/loader.cjs",
+    "clean": "rm -rf dist"
+  }
+}

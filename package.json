@@ -1,0 +1,20 @@
+{
+  "name": "desktop-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Universal Electron app injection framework for request interception and UI customization",
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:loader": "pnpm --filter @desktop-proxy/loader build",
+    "build:runtime": "pnpm --filter @desktop-proxy/runtime build",
+    "build:preload": "pnpm --filter @desktop-proxy/preload build",
+    "build:installer": "pnpm --filter @desktop-proxy/installer build",
+    "build:plugin-sdk": "pnpm --filter @desktop-proxy/plugin-sdk build",
+    "dev": "pnpm -r dev",
+    "clean": "pnpm -r clean",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

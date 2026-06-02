@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Logs
+*.log
+logs/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+
+# Reference projects (vendored, each has its own git repo)
+third-project/
+
+# QidianAsk runtime port file
+.qidianask_port
+
+# Env
+.env
+.env.local

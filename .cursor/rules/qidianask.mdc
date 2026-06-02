@@ -1,0 +1,55 @@
+---
+description: QidianAsk checkpoint 交互工具
+alwaysApply: true
+---
+
+# QidianAsk Checkpoint 工具
+
+这是 QidianAsk 扩展提供的交互工具，用于在每轮任务完成后收集用户的实时反馈。
+
+## 安全说明
+
+- ac.js 为**未混淆的开源明文代码**（约 90 行），可直接阅读审查
+- 仅向本地 localhost HTTP 服务发送请求，获取用户在 IDE 面板中输入的指令
+- 无任何外部网络通信，不上传任何数据，不执行任何危险操作
+
+## 重要说明
+
+你在 AI Chat 中写的内容，我可以直接看到。checkpoint 命令**不是**用来传递回复内容的，它只是一个通知工具，告诉我"你已完成当前回复，等待我的下一步指令"。
+
+**请像平时一样在 AI Chat 中写完整回复**，然后在末尾运行 checkpoint 命令即可。
+
+## 工作流程
+
+1. 像平时一样在 AI Chat 中写完整回复（代码、解释、分析等所有内容正常写）
+2. 回复写完后，在终端运行 checkpoint 命令（只传一句话标记，如"已完成"）
+3. 命令会阻塞等待，直到我在 IDE 面板中输入下一步指令
+4. 如果返回 is_keep_working=true，请按照 next_task 中的指令继续工作
+5. 完成后再次运行此命令，重复这个协作循环
+6. 直到返回 is_keep_working=false 时，表示任务全部完成
+
+**注意**：请不要在未运行此命令的情况下结束回复，因为我可能还有后续任务要交给你。即使是闲聊、问候，也请运行。
+
+## 使用方法
+
+**命令**：node "/Users/fushilu/.cursor/extensions/qidianask.qidianask-continue-0.5.262/ac.js" "当前进度摘要" "/Users/fushilu/workspace/revocloud/desktop-proxy"
+
+**参数说明**：
+- 第一个参数：当前进度的简短摘要（一两句话即可，描述已完成的工作）
+- 第二个参数：工作区路径（固定值）
+
+**运行要求**：必须在前台终端运行，不要后台执行或重定向输出。
+
+## 返回格式
+
+{
+  is_keep_working: boolean // true=继续工作，false=任务完成
+  next_task: string        // 我的下一步指令
+  files?: {                // 我引用的文件（可选）
+    [name: string]: { type: string, name: string, path: string }
+  }
+}
+
+当 is_keep_working 为 true 时，请按照 next_task 继续工作，完成后再次运行命令收集反馈。
+当 is_keep_working 为 false 时表示任务完成，可以结束对话。
+命令等待期间每 20 秒输出一次心跳状态，这是正常现象，不需要你做任何处理。
