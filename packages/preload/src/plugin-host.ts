@@ -18,6 +18,7 @@ import type {
   PluginIPC,
   PluginNetwork,
   PluginFS,
+  PluginCDP,
   PluginApp,
   UnsubscribeFn,
 } from "@desktop-proxy/plugin-sdk";
@@ -184,6 +185,8 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
     stat: (p) => ipc.invoke("desktop-proxy:fs:stat", id, p),
   };
 
+  const cdp = createCDPApi(id, manifest, ipc);
+
   const app: PluginApp = {
     getInfo: async () => ipc.invoke("desktop-proxy:app-info"),
     getWindows: async () => ipc.invoke("desktop-proxy:windows"),
@@ -199,7 +202,75 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
     ipc: ipcBridge,
     network,
     fs: fsApi,
+    cdp,
     app,
+  };
+}
+
+// ── CDP API (renderer) ───────────────────────────────────────────────────────
+
+function createCDPApi(
+  id: string,
+  manifest: PluginManifest,
+  ipc: IpcRenderer,
+): PluginCDP {
+  const granted = Array.isArray(manifest.permissions) && manifest.permissions.includes("cdp");
+
+  // Per-plugin event routing: one shared ipc listener dispatches to handlers
+  // registered for each CDP event method.
+  const handlers = new Map<string, Set<(params: unknown) => void>>();
+  let listening = false;
+
+  function ensureListening(): void {
+    if (listening) return;
+    ipc.on("desktop-proxy:cdp:event", (_e: IpcRendererEvent, payload: { method: string; params: unknown }) => {
+      const set = handlers.get(payload.method);
+      if (set) for (const h of set) { try { h(payload.params); } catch { /* ignore */ } }
+    });
+    listening = true;
+  }
+
+  function requireGrant(): void {
+    if (!granted) {
+      throw new Error(`Plugin ${id} lacks the "cdp" permission (add "permissions": ["cdp"] to manifest.json)`);
+    }
+  }
+
+  return {
+    attach: async () => {
+      requireGrant();
+      ensureListening();
+      return ipc.invoke("desktop-proxy:cdp:attach");
+    },
+    detach: async () => {
+      requireGrant();
+      return ipc.invoke("desktop-proxy:cdp:detach");
+    },
+    isAttached: async () => {
+      requireGrant();
+      return ipc.invoke("desktop-proxy:cdp:isAttached");
+    },
+    send: async <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
+      requireGrant();
+      return ipc.invoke("desktop-proxy:cdp:send", method, params) as Promise<T>;
+    },
+    on: (event: string, handler: (params: unknown) => void): UnsubscribeFn => {
+      requireGrant();
+      ensureListening();
+      let set = handlers.get(event);
+      if (!set) handlers.set(event, (set = new Set()));
+      set.add(handler);
+      return () => { set?.delete(handler); };
+    },
+    evaluate: async <T>(expression: string, options?: { awaitPromise?: boolean; returnByValue?: boolean }): Promise<T> => {
+      requireGrant();
+      const result = (await ipc.invoke("desktop-proxy:cdp:send", "Runtime.evaluate", {
+        expression,
+        awaitPromise: options?.awaitPromise ?? true,
+        returnByValue: options?.returnByValue ?? true,
+      })) as { result?: { value?: unknown } };
+      return result?.result?.value as T;
+    },
   };
 }
 

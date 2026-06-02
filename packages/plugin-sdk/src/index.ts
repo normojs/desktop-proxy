@@ -28,6 +28,8 @@ export interface PluginManifest {
   githubRepo?: string;
   /** Minimum desktop-proxy version required */
   minDesktopProxyVersion?: string;
+  /** Capabilities the plugin requests (e.g. "cdp"). Gates powerful APIs. */
+  permissions?: string[];
 }
 
 // ── Plugin API (available to plugins at runtime) ─────────────────────────────
@@ -141,6 +143,33 @@ export interface PluginFS {
   stat(path: string): Promise<PluginFileStat>;
 }
 
+// ── Chrome DevTools Protocol (CDP) ───────────────────────────────────────────
+
+export interface CDPEvaluateOptions {
+  /** Await a returned promise before resolving (default true). */
+  awaitPromise?: boolean;
+  /** Return the value by value rather than a remote object handle (default true). */
+  returnByValue?: boolean;
+}
+
+/**
+ * Low-level Chrome DevTools Protocol access for the plugin's own renderer.
+ * Requires the "cdp" permission in the plugin manifest. Backed by Electron's
+ * in-process `webContents.debugger` (no remote debugging port).
+ *
+ * Remember to enable the relevant CDP domain (e.g. `send("Network.enable")`)
+ * before its events will be delivered to `on(...)`.
+ */
+export interface PluginCDP {
+  attach(): Promise<void>;
+  detach(): Promise<void>;
+  isAttached(): Promise<boolean>;
+  send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
+  on(event: string, handler: (params: unknown) => void): UnsubscribeFn;
+  /** Convenience wrapper around `Runtime.evaluate` (runs in the page's main world). */
+  evaluate<T = unknown>(expression: string, options?: CDPEvaluateOptions): Promise<T>;
+}
+
 // ── App Info ─────────────────────────────────────────────────────────────────
 
 export interface AppInfo {
@@ -177,6 +206,7 @@ export interface PluginAPI {
   ipc: PluginIPC;
   network: PluginNetwork;
   fs: PluginFS;
+  cdp: PluginCDP;
   app: PluginApp;
 }
 
@@ -200,6 +230,9 @@ export function validateManifest(m: unknown): { valid: true; manifest: PluginMan
   if (typeof manifest.version !== "string" || !manifest.version) errors.push("version must be a non-empty string");
   if (typeof manifest.main !== "string" || !manifest.main) errors.push("main must be a non-empty string");
   if (!["main", "renderer", "both"].includes(manifest.scope as string)) errors.push('scope must be "main", "renderer", or "both"');
+  if (manifest.permissions !== undefined && (!Array.isArray(manifest.permissions) || manifest.permissions.some((p) => typeof p !== "string"))) {
+    errors.push("permissions must be an array of strings");
+  }
 
   if (errors.length > 0) return { valid: false, errors };
   return { valid: true, manifest: m as PluginManifest };

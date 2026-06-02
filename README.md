@@ -238,6 +238,7 @@ my-plugin/
 | `iconUrl` | no | `data:` or `https:` icon URL. |
 | `githubRepo` | no | `owner/repo` for update checks. |
 | `minDesktopProxyVersion` | no | Minimum framework version. |
+| `permissions` | no | Requested capabilities (e.g. `["cdp"]`) that gate powerful APIs. |
 
 **`index.js`** (CommonJS module shape)
 
@@ -288,6 +289,7 @@ re-runs renderer plugins when files change.
 | `api.ipc` | Namespaced `on` / `send` / `invoke` between main and renderer. |
 | `api.network` | `onRequest` / `onResponse` interception hooks. |
 | `api.fs` | Sandboxed file I/O confined to the plugin's data dir: `read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat` (utf8 or base64). |
+| `api.cdp` | Chrome DevTools Protocol for the plugin's own renderer (`attach` / `send` / `on` / `evaluate`). Requires the `"cdp"` permission. |
 | `api.app` | `getInfo()` and `getWindows()`. |
 
 ### Example: the bundled request interceptor
@@ -305,6 +307,24 @@ The panel lives in an isolated Shadow DOM so it is unaffected by (and does not
 affect) the host app's markup and CSS — making it work uniformly across any
 Electron app. Open it with the floating **DP** button (bottom-right) or the
 **Cmd/Ctrl+Shift+\\** hotkey; press **Esc** to close.
+
+### CDP access
+
+Plugins that declare `"permissions": ["cdp"]` receive `api.cdp`, a thin Chrome
+DevTools Protocol client for their **own** renderer, backed by Electron's
+in-process `webContents.debugger` — **no remote debugging port is opened**.
+Enable a CDP domain before its events are delivered:
+
+```js
+await api.cdp.attach();
+await api.cdp.send("Network.enable");
+api.cdp.on("Network.responseReceived", (p) => api.log.info("response", p));
+const title = await api.cdp.evaluate("document.title"); // runs in the page's main world
+```
+
+CDP is powerful (full page inspection/control), so it is gated behind the
+manifest permission and confined to the plugin's own webContents. `attach()`
+fails if DevTools is already open on that window.
 
 ---
 

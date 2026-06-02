@@ -11,6 +11,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 
 import { createMainNetwork, type MainNetwork } from "./network";
+import { createMainCDP, type MainCDP } from "./cdp";
 import {
   pluginDataDir,
   fsRead,
@@ -126,6 +127,16 @@ function getMainNetwork(): MainNetwork {
     );
   }
   return _mainNetwork;
+}
+
+// Single CDP hub shared across the runtime (manages webContents.debugger).
+let _mainCDP: MainCDP | null = null;
+
+function getMainCDP(): MainCDP {
+  if (!_mainCDP) {
+    _mainCDP = createMainCDP(log);
+  }
+  return _mainCDP;
 }
 
 // ── Preload Registration ─────────────────────────────────────────────────────
@@ -294,6 +305,15 @@ function createMainProcessAPI(manifest: import("@desktop-proxy/plugin-sdk").Plug
         stat: async (p: string) => fsStat(root, p),
       };
     })(),
+    // CDP is renderer-scoped in v1 (no main-process target). Surface clear errors.
+    cdp: {
+      attach: async () => { throw new Error("cdp is not available to main-process plugins"); },
+      detach: async () => {},
+      isAttached: async () => false,
+      send: async () => { throw new Error("cdp is not available to main-process plugins"); },
+      on: () => () => {},
+      evaluate: async () => { throw new Error("cdp is not available to main-process plugins"); },
+    },
     app: {
       getInfo: async () => {
         return {
@@ -429,6 +449,23 @@ function setupIPCBridge(): void {
   );
   electron.ipcMain.handle("desktop-proxy:fs:stat", async (_e, id: string, p: string) =>
     fsStat(fsRoot(id), p),
+  );
+
+  // Chrome DevTools Protocol — attached to the calling renderer's webContents.
+  // Permission gating happens preload-side; events flow back via desktop-proxy:cdp:event.
+  electron.ipcMain.handle("desktop-proxy:cdp:attach", async (e) => {
+    await getMainCDP().attach(e.sender);
+  });
+  electron.ipcMain.handle("desktop-proxy:cdp:detach", async (e) => {
+    getMainCDP().detach(e.sender);
+  });
+  electron.ipcMain.handle("desktop-proxy:cdp:isAttached", async (e) =>
+    getMainCDP().isAttached(e.sender),
+  );
+  electron.ipcMain.handle(
+    "desktop-proxy:cdp:send",
+    async (e, method: string, params?: Record<string, unknown>) =>
+      getMainCDP().send(e.sender, method, params),
   );
 }
 
