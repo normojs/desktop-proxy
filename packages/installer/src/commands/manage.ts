@@ -189,7 +189,7 @@ export async function pluginCheckUpdates(json = false): Promise<void> {
 
 // ── config ───────────────────────────────────────────────────────────────────
 
-const BOOL_KEYS = new Set(["autoUpdate", "safeMode", "stealth", "enforcePermissions"]);
+const BOOL_KEYS = new Set(["autoUpdate", "safeMode", "stealth", "enforcePermissions", "cdpNetwork"]);
 const STRING_KEYS = new Set(["logLevel"]);
 const NUMBER_KEYS = new Set(["maxResponseBodyBytes"]);
 const SETTABLE = [...BOOL_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];

@@ -42,6 +42,12 @@ type Logger = (level: string, ...args: unknown[]) => void;
 export interface MainNetwork {
   onRequest(handler: NetworkRequestHandler): UnsubscribeFn;
   onResponse(handler: NetworkResponseHandler): UnsubscribeFn;
+  /** Feed an externally-observed request (e.g. from the CDP network observer). */
+  observeRequest(req: NetworkRequest): void;
+  /** Feed an externally-observed response. */
+  observeResponse(res: NetworkResponse): void;
+  /** True if any plugin is listening (lets observers skip work). */
+  hasHandlers(): boolean;
 }
 
 const URL_FILTER = { urls: ["*://*/*"] };
@@ -183,17 +189,16 @@ export function createMainNetwork(
     })
     .catch((e) => log("error", "main network: whenReady failed:", String(e)));
 
+  const hasHandlers = (): boolean => requestHandlers.size > 0 || responseHandlers.size > 0;
+  // Observe-only feed (modifications not applied): used by Node + CDP observers.
+  const observeRequest = (req: NetworkRequest): void => {
+    void runRequestHandlers(req);
+  };
+  const observeResponse = dispatchResponse;
+
   // Node http/https traffic isn't visible to webRequest; patch the Node modules
   // and feed observations into the same handler sets (tagged source "node-http").
-  installNodeIntercept({
-    hasHandlers: () => requestHandlers.size > 0 || responseHandlers.size > 0,
-    observeRequest: (req) => {
-      void runRequestHandlers(req); // v1: observe only (modifications not applied)
-    },
-    observeResponse: dispatchResponse,
-    maxBodyBytes,
-    log,
-  });
+  installNodeIntercept({ hasHandlers, observeRequest, observeResponse, maxBodyBytes, log });
 
   return {
     onRequest(handler: NetworkRequestHandler): UnsubscribeFn {
@@ -212,5 +217,8 @@ export function createMainNetwork(
         syncResponse();
       };
     },
+    observeRequest,
+    observeResponse,
+    hasHandlers,
   };
 }

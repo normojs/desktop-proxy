@@ -16,6 +16,7 @@ import type { PluginCDPCore } from "@desktop-proxy/plugin-sdk";
 
 import { createMainNetwork, type MainNetwork } from "./network";
 import { createMainCDP, type MainCDP } from "./cdp";
+import { createCdpNetworkObserver, type CdpNetworkObserver } from "./net/cdp-network";
 import { createLogger, parseLevel, type Logger } from "./logger";
 import {
   pluginDataDir,
@@ -82,6 +83,8 @@ interface Config {
   enforcePermissions?: boolean;
   /** Max bytes of a response body captured for plugins (0 = unlimited). */
   maxResponseBodyBytes?: number;
+  /** Observe renderer requests via CDP (catches all page requests; attaches the debugger). */
+  cdpNetwork?: boolean;
   plugins?: Record<string, { enabled: boolean }>;
 }
 
@@ -167,6 +170,22 @@ function getMainCDP(): MainCDP {
     _mainCDP = createMainCDP(log);
   }
   return _mainCDP;
+}
+
+// Passive CDP Network observer for renderer requests (config-gated).
+let _cdpNetObserver: CdpNetworkObserver | null = null;
+
+function getCdpNetworkObserver(): CdpNetworkObserver {
+  if (!_cdpNetObserver) {
+    const net = getMainNetwork();
+    _cdpNetObserver = createCdpNetworkObserver(getMainCDP(), {
+      observeRequest: (req) => net.observeRequest(req),
+      observeResponse: (res) => net.observeResponse(res),
+      maxBodyBytes: () => readConfig().maxResponseBodyBytes ?? 1024 * 1024,
+      log,
+    });
+  }
+  return _cdpNetObserver;
 }
 
 // CDP core for a main-process plugin. Targets the focused window (or the first
@@ -714,6 +733,14 @@ electron.app.on("web-contents-created", (_e, wc) => {
     wc.on("preload-error", (_ev, p, err) => {
       log("error", `wc ${wc.id} preload-error path=${p}`, String((err as Error)?.stack ?? err));
     });
+
+    // Passive renderer network observation via CDP (opt-in).
+    if (!isSafeModeEnabled() && readConfig().cdpNetwork === true) {
+      const type = wc.getType();
+      if (type === "window" || type === "webview" || type === "browserView") {
+        void getCdpNetworkObserver().observe(wc);
+      }
+    }
   } catch (e) {
     log("error", "web-contents-created handler failed:", String(e));
   }
