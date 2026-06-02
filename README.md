@@ -430,6 +430,11 @@ app's own main process cannot enumerate handlers by a known name. Only the
 uses it to learn the random prefix). Note: renderer `api.storage` still uses
 visible `localStorage` keys — use `api.fs` for persistence you want hidden.
 
+Plugins are unaffected by randomization: `api.ipc.*` takes logical channel names
+that the framework prefixes consistently on both the main and renderer sides. A
+plugin that bypasses `api.ipc` with a raw, hardcoded `ipcRenderer` channel would
+break under randomization — always use `api.ipc`.
+
 ---
 
 ## Platform Support

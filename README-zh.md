@@ -414,6 +414,9 @@ DESKTOP_PROXY_LOG_LEVEL=debug   # debug | info | warn | error | silent
 只有 `desktop-proxy:config-sync` 这个引导通道保持固定名（preload 用它来获知随机前缀）。
 注意：渲染层 `api.storage` 仍使用可见的 `localStorage` key——需要隐藏的持久化请用 `api.fs`。
 
+插件不受随机化影响：`api.ipc.*` 接收逻辑通道名，框架会在主/渲染两端用同一前缀一致地包装。
+若插件绕过 `api.ipc`、直接用硬编码的 `ipcRenderer` 通道名，则在随机化下会失配——请始终用 `api.ipc`。
+
 ---
 
 ## 平台支持
