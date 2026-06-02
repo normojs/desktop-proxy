@@ -422,8 +422,13 @@ What stealth does **not** change, and why:
   live in the isolated preload world, so they are not a page-detection vector.
 - `__REACT_DEVTOOLS_GLOBAL_HOOK__` is kept because it is indistinguishable from
   real React DevTools.
-- Per-session randomization of IPC channel names (defense against the host app's
-  own main process enumerating handlers) is not yet implemented.
+
+In stealth mode the IPC channel names are also **randomized per session** (e.g.
+`dp-a1b2c3:list-plugins` instead of `desktop-proxy:list-plugins`), so the host
+app's own main process cannot enumerate handlers by a known name. Only the
+`desktop-proxy:config-sync` bootstrap channel keeps a fixed name (the preload
+uses it to learn the random prefix). Note: renderer `api.storage` still uses
+visible `localStorage` keys — use `api.fs` for persistence you want hidden.
 
 ---
 

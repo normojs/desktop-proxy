@@ -9,6 +9,7 @@
 
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { randomBytes } from "node:crypto";
 
 import { createCDP } from "@desktop-proxy/plugin-sdk";
 import type { PluginCDPCore } from "@desktop-proxy/plugin-sdk";
@@ -99,6 +100,17 @@ function isSafeModeEnabled(): boolean {
 
 function isStealthEnabled(): boolean {
   return readConfig().stealth === true;
+}
+
+// IPC channel prefix. In stealth mode it is randomized per session so the host
+// app's main process cannot enumerate handlers by a known name; otherwise it is
+// the stable "desktop-proxy" prefix. The renderer learns it via config-sync.
+const CHANNEL_PREFIX = isStealthEnabled()
+  ? `dp-${randomBytes(6).toString("hex")}`
+  : "desktop-proxy";
+
+function ch(name: string): string {
+  return `${CHANNEL_PREFIX}:${name}`;
 }
 
 function isPluginEnabled(id: string): boolean {
@@ -342,7 +354,7 @@ function createMainProcessAPI(manifest: import("@desktop-proxy/plugin-sdk").Plug
     },
     ipc: {
       on: (channel: string, handler: (...args: unknown[]) => void) => {
-        const fullChannel = `desktop-proxy:${manifest.id}:${channel}`;
+        const fullChannel = ch(`${manifest.id}:${channel}`);
         electron.ipcMain.on(fullChannel, (_e, ...args) => handler(...args));
         return () => electron.ipcMain.removeAllListeners(fullChannel);
       },
@@ -399,7 +411,7 @@ function setupIPCBridge(): void {
   const electron = getElectron();
 
   // Plugin source reading — preload fetches plugin source via this channel
-  electron.ipcMain.handle("desktop-proxy:read-plugin-source", async (_e, entryPath: string) => {
+  electron.ipcMain.handle(ch("read-plugin-source"), async (_e, entryPath: string) => {
     try {
       return fs.readFileSync(entryPath, "utf8");
     } catch (e) {
@@ -409,7 +421,7 @@ function setupIPCBridge(): void {
   });
 
   // Plugin listing — preload asks main for the plugin list
-  electron.ipcMain.handle("desktop-proxy:list-plugins", async () => {
+  electron.ipcMain.handle(ch("list-plugins"), async () => {
     discoverPlugins();
     return discoveredPlugins.map((p) => ({
       manifest: p.manifest,
@@ -420,20 +432,20 @@ function setupIPCBridge(): void {
   });
 
   // User paths — preload needs to know the user root
-  electron.ipcMain.handle("desktop-proxy:user-paths", async () => ({
+  electron.ipcMain.handle(ch("user-paths"), async () => ({
     userRoot,
     runtimeDir,
     pluginsDir: PLUGINS_DIR,
   }));
 
   // Config read
-  electron.ipcMain.handle("desktop-proxy:get-config", async () => ({
+  electron.ipcMain.handle(ch("get-config"), async () => ({
     ...readConfig(),
     version: "0.1.0",
   }));
 
   // Toggle plugin enabled state
-  electron.ipcMain.handle("desktop-proxy:toggle-plugin", async (_e, id: string, enabled: boolean) => {
+  electron.ipcMain.handle(ch("toggle-plugin"), async (_e, id: string, enabled: boolean) => {
     const cfg = readConfig();
     cfg.plugins ??= {};
     cfg.plugins[id] = { ...cfg.plugins[id], enabled };
@@ -442,7 +454,7 @@ function setupIPCBridge(): void {
   });
 
   // Toggle safe mode
-  electron.ipcMain.handle("desktop-proxy:toggle-safe-mode", async (_e, enabled: boolean) => {
+  electron.ipcMain.handle(ch("toggle-safe-mode"), async (_e, enabled: boolean) => {
     if (enabled) {
       fs.writeFileSync(SAFE_MODE_FILE, "");
     } else {
@@ -452,7 +464,7 @@ function setupIPCBridge(): void {
   });
 
   // App info
-  electron.ipcMain.handle("desktop-proxy:app-info", async () => ({
+  electron.ipcMain.handle(ch("app-info"), async () => ({
     name: electron.app.getName(),
     version: electron.app.getVersion(),
     electronVersion: process.versions.electron || "unknown",
@@ -462,7 +474,7 @@ function setupIPCBridge(): void {
   }));
 
   // Window list — preload's app.getWindows() invokes this channel
-  electron.ipcMain.handle("desktop-proxy:windows", async () =>
+  electron.ipcMain.handle(ch("windows"), async () =>
     electron.BrowserWindow.getAllWindows()
       .filter((w) => !w.isDestroyed())
       .map((w) => ({
@@ -474,15 +486,19 @@ function setupIPCBridge(): void {
   );
 
   // Preload log forwarding (renderer → main log file)
-  electron.ipcMain.on("desktop-proxy:preload-log", (_e, level: string, msg: string) => {
+  electron.ipcMain.on(ch("preload-log"), (_e, level: string, msg: string) => {
     log(level, `[preload]`, msg);
   });
 
-  // Synchronous config read — the preload needs the stealth flag and log level
-  // *before* it installs any hooks (which happens synchronously at preload
-  // evaluation).
+  // Synchronous config read — FIXED bootstrap channel (the preload learns the
+  // randomized channel prefix, stealth flag, and log level from here before it
+  // installs any hooks).
   electron.ipcMain.on("desktop-proxy:config-sync", (e) => {
-    e.returnValue = { stealth: isStealthEnabled(), logLevel: rootLogger.getLevel() };
+    e.returnValue = {
+      stealth: isStealthEnabled(),
+      logLevel: rootLogger.getLevel(),
+      channelPrefix: CHANNEL_PREFIX,
+    };
   });
 
   // Sandboxed filesystem — renderer plugins reach disk through these handlers.
@@ -490,38 +506,38 @@ function setupIPCBridge(): void {
   type FileEncoding = import("@desktop-proxy/plugin-sdk").FileEncoding;
   const fsRoot = (id: string) => pluginDataDir(userRoot, id);
 
-  electron.ipcMain.handle("desktop-proxy:fs:read", async (_e, id: string, p: string, encoding?: FileEncoding) =>
+  electron.ipcMain.handle(ch("fs:read"), async (_e, id: string, p: string, encoding?: FileEncoding) =>
     fsRead(fsRoot(id), p, encoding),
   );
-  electron.ipcMain.handle("desktop-proxy:fs:write", async (_e, id: string, p: string, data: string, encoding?: FileEncoding) =>
+  electron.ipcMain.handle(ch("fs:write"), async (_e, id: string, p: string, data: string, encoding?: FileEncoding) =>
     fsWrite(fsRoot(id), p, data, encoding),
   );
-  electron.ipcMain.handle("desktop-proxy:fs:exists", async (_e, id: string, p: string) =>
+  electron.ipcMain.handle(ch("fs:exists"), async (_e, id: string, p: string) =>
     fsExists(fsRoot(id), p),
   );
-  electron.ipcMain.handle("desktop-proxy:fs:list", async (_e, id: string, p?: string) =>
+  electron.ipcMain.handle(ch("fs:list"), async (_e, id: string, p?: string) =>
     fsList(fsRoot(id), p),
   );
-  electron.ipcMain.handle("desktop-proxy:fs:delete", async (_e, id: string, p: string) =>
+  electron.ipcMain.handle(ch("fs:delete"), async (_e, id: string, p: string) =>
     fsDelete(fsRoot(id), p),
   );
-  electron.ipcMain.handle("desktop-proxy:fs:mkdir", async (_e, id: string, p: string) =>
+  electron.ipcMain.handle(ch("fs:mkdir"), async (_e, id: string, p: string) =>
     fsMkdir(fsRoot(id), p),
   );
-  electron.ipcMain.handle("desktop-proxy:fs:stat", async (_e, id: string, p: string) =>
+  electron.ipcMain.handle(ch("fs:stat"), async (_e, id: string, p: string) =>
     fsStat(fsRoot(id), p),
   );
 
   // Chrome DevTools Protocol — attached to the calling renderer's webContents.
-  // Permission gating happens preload-side; events flow back via desktop-proxy:cdp:event.
+  // Permission gating happens preload-side; events flow back via ch("cdp:event").
   const cdpForwarded = new Set<number>();
-  electron.ipcMain.handle("desktop-proxy:cdp:attach", async (e) => {
+  electron.ipcMain.handle(ch("cdp:attach"), async (e) => {
     const wc = e.sender;
     await getMainCDP().attach(wc);
     if (!cdpForwarded.has(wc.id)) {
       cdpForwarded.add(wc.id);
       const off = getMainCDP().onEvent(wc, (method, params) => {
-        if (!wc.isDestroyed()) wc.send("desktop-proxy:cdp:event", { method, params });
+        if (!wc.isDestroyed()) wc.send(ch("cdp:event"), { method, params });
       });
       wc.once("destroyed", () => {
         off();
@@ -529,14 +545,14 @@ function setupIPCBridge(): void {
       });
     }
   });
-  electron.ipcMain.handle("desktop-proxy:cdp:detach", async (e) => {
+  electron.ipcMain.handle(ch("cdp:detach"), async (e) => {
     getMainCDP().detach(e.sender);
   });
-  electron.ipcMain.handle("desktop-proxy:cdp:isAttached", async (e) =>
+  electron.ipcMain.handle(ch("cdp:isAttached"), async (e) =>
     getMainCDP().isAttached(e.sender),
   );
   electron.ipcMain.handle(
-    "desktop-proxy:cdp:send",
+    ch("cdp:send"),
     async (e, method: string, params?: Record<string, unknown>) =>
       getMainCDP().send(e.sender, method, params),
   );
@@ -555,7 +571,7 @@ function startFSWatcher(): void {
         electron.BrowserWindow.getAllWindows()
           .filter((w) => !w.isDestroyed())
           .forEach((w) => {
-            w.webContents.send("desktop-proxy:plugins-changed");
+            w.webContents.send(ch("plugins-changed"));
           });
       }, 500);
     });

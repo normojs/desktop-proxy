@@ -13,6 +13,7 @@ import type { IpcRenderer } from "electron";
 
 import { isLevelEnabled } from "@desktop-proxy/plugin-sdk";
 
+import { ch, setChannelPrefix } from "./channels";
 import { installReactHook } from "./react-hook";
 import { installNetworkInterceptor } from "./network-interceptor";
 import { startPluginHost, teardownPluginHost, setSettingsCallbacks, setLogLevel } from "./plugin-host";
@@ -38,7 +39,7 @@ function fileLog(stage: string, extra?: unknown): void {
   if (!isLevelEnabled("info", activeLogLevel)) return;
   const msg = `[desktop-proxy preload] ${stage}${extra !== undefined ? " " + JSON.stringify(extra) : ""}`;
   try {
-    getIpcRenderer().send("desktop-proxy:preload-log", "info", msg);
+    getIpcRenderer().send(ch("preload-log"), "info", msg);
   } catch {
     // best effort
   }
@@ -48,20 +49,25 @@ function fileLog(stage: string, extra?: unknown): void {
  * Read framework config synchronously. The hooks below run before any page code,
  * so we cannot wait on an async IPC round-trip here.
  */
-function readConfigSync(): { stealth: boolean; logLevel: string } {
+function readConfigSync(): { stealth: boolean; logLevel: string; channelPrefix: string } {
   try {
     const cfg = getIpcRenderer().sendSync("desktop-proxy:config-sync") as
-      | { stealth?: boolean; logLevel?: string }
+      | { stealth?: boolean; logLevel?: string; channelPrefix?: string }
       | undefined;
-    return { stealth: cfg?.stealth === true, logLevel: cfg?.logLevel ?? "info" };
+    return {
+      stealth: cfg?.stealth === true,
+      logLevel: cfg?.logLevel ?? "info",
+      channelPrefix: cfg?.channelPrefix ?? "desktop-proxy",
+    };
   } catch {
-    return { stealth: false, logLevel: "info" };
+    return { stealth: false, logLevel: "info", channelPrefix: "desktop-proxy" };
   }
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
-const { stealth, logLevel } = readConfigSync();
+const { stealth, logLevel, channelPrefix } = readConfigSync();
+setChannelPrefix(channelPrefix);
 activeLogLevel = logLevel;
 setLogLevel(logLevel);
 fileLog("preload entry", { url: window.location.href, stealth, logLevel });
@@ -113,7 +119,7 @@ if (document.readyState === "loading") {
 // Step 4: Hot reload support — listen for plugin changes from main process.
 let reloading: Promise<void> | null = null;
 
-getIpcRenderer().on("desktop-proxy:plugins-changed", () => {
+getIpcRenderer().on(ch("plugins-changed"), () => {
   if (reloading) return;
   reloading = (async () => {
     try {

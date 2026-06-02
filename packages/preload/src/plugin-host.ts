@@ -27,6 +27,7 @@ import { isLevelEnabled, createCDP } from "@desktop-proxy/plugin-sdk";
 
 import type { IpcRenderer, IpcRendererEvent } from "electron";
 
+import { ch } from "./channels";
 import { fiberForNode } from "./react-hook";
 import { onRequest, onResponse } from "./network-interceptor";
 
@@ -80,7 +81,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
   const emitLog = (level: LogLevel, args: unknown[]): void => {
     if (!isLevelEnabled(level, currentLogLevel)) return;
     try {
-      ipc.send("desktop-proxy:preload-log", level, `[${id}] ${args.map(String).join(" ")}`);
+      ipc.send(ch("preload-log"), level, `[${id}] ${args.map(String).join(" ")}`);
     } catch {
       // best effort
     }
@@ -169,16 +170,16 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
 
   const ipcBridge: PluginIPC = {
     on: (channel: string, handler: (...args: unknown[]) => void): UnsubscribeFn => {
-      const fullChannel = `desktop-proxy:${id}:${channel}`;
+      const fullChannel = ch(`${id}:${channel}`);
       const wrapped = (_e: IpcRendererEvent, ...args: unknown[]) => handler(...args);
       ipc.on(fullChannel, wrapped);
       return () => { ipc.removeListener(fullChannel, wrapped); };
     },
     send: (channel: string, ...args: unknown[]) => {
-      ipc.send(`desktop-proxy:${id}:${channel}`, ...args);
+      ipc.send(ch(`${id}:${channel}`), ...args);
     },
     invoke: async <T>(channel: string, ...args: unknown[]): Promise<T> => {
-      return ipc.invoke(`desktop-proxy:${id}:${channel}`, ...args) as Promise<T>;
+      return ipc.invoke(ch(`${id}:${channel}`), ...args) as Promise<T>;
     },
   };
 
@@ -188,20 +189,20 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
   };
 
   const fsApi: PluginFS = {
-    read: (p, encoding) => ipc.invoke("desktop-proxy:fs:read", id, p, encoding),
-    write: (p, data, encoding) => ipc.invoke("desktop-proxy:fs:write", id, p, data, encoding),
-    exists: (p) => ipc.invoke("desktop-proxy:fs:exists", id, p),
-    list: (p) => ipc.invoke("desktop-proxy:fs:list", id, p),
-    delete: (p) => ipc.invoke("desktop-proxy:fs:delete", id, p),
-    mkdir: (p) => ipc.invoke("desktop-proxy:fs:mkdir", id, p),
-    stat: (p) => ipc.invoke("desktop-proxy:fs:stat", id, p),
+    read: (p, encoding) => ipc.invoke(ch("fs:read"), id, p, encoding),
+    write: (p, data, encoding) => ipc.invoke(ch("fs:write"), id, p, data, encoding),
+    exists: (p) => ipc.invoke(ch("fs:exists"), id, p),
+    list: (p) => ipc.invoke(ch("fs:list"), id, p),
+    delete: (p) => ipc.invoke(ch("fs:delete"), id, p),
+    mkdir: (p) => ipc.invoke(ch("fs:mkdir"), id, p),
+    stat: (p) => ipc.invoke(ch("fs:stat"), id, p),
   };
 
   const cdp = createCDP(createRendererCDPCore(id, manifest, ipc));
 
   const app: PluginApp = {
-    getInfo: async () => ipc.invoke("desktop-proxy:app-info"),
-    getWindows: async () => ipc.invoke("desktop-proxy:windows"),
+    getInfo: async () => ipc.invoke(ch("app-info")),
+    getWindows: async () => ipc.invoke(ch("windows")),
   };
 
   return {
@@ -237,7 +238,7 @@ function createRendererCDPCore(
 
   function ensureListening(): void {
     if (listening) return;
-    ipc.on("desktop-proxy:cdp:event", (_e: IpcRendererEvent, payload: { method: string; params: unknown }) => {
+    ipc.on(ch("cdp:event"), (_e: IpcRendererEvent, payload: { method: string; params: unknown }) => {
       const set = handlers.get(payload.method);
       if (set) for (const h of set) { try { h(payload.params); } catch { /* ignore */ } }
     });
@@ -254,19 +255,19 @@ function createRendererCDPCore(
     attach: async () => {
       requireGrant();
       ensureListening();
-      return ipc.invoke("desktop-proxy:cdp:attach");
+      return ipc.invoke(ch("cdp:attach"));
     },
     detach: async () => {
       requireGrant();
-      return ipc.invoke("desktop-proxy:cdp:detach");
+      return ipc.invoke(ch("cdp:detach"));
     },
     isAttached: async () => {
       requireGrant();
-      return ipc.invoke("desktop-proxy:cdp:isAttached");
+      return ipc.invoke(ch("cdp:isAttached"));
     },
     send: async <T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> => {
       requireGrant();
-      return ipc.invoke("desktop-proxy:cdp:send", method, params) as Promise<T>;
+      return ipc.invoke(ch("cdp:send"), method, params) as Promise<T>;
     },
     on: (event: string, handler: (params: unknown) => void): UnsubscribeFn => {
       requireGrant();
@@ -290,14 +291,14 @@ export async function startPluginHost(): Promise<void> {
     entry: string;
     dir: string;
     enabled: boolean;
-  }> = await ipc.invoke("desktop-proxy:list-plugins");
+  }> = await ipc.invoke(ch("list-plugins"));
 
   for (const plugin of plugins) {
     if (plugin.manifest.scope === "main") continue; // main-only, skip
     if (!plugin.enabled) continue;
 
     try {
-      const source: string = await ipc.invoke("desktop-proxy:read-plugin-source", plugin.entry);
+      const source: string = await ipc.invoke(ch("read-plugin-source"), plugin.entry);
 
       // Evaluate as CommonJS-shaped module
       const module = { exports: {} as PluginModule };
@@ -320,9 +321,9 @@ export async function startPluginHost(): Promise<void> {
         stop: tweak.stop?.bind(tweak),
       });
 
-      ipc.send("desktop-proxy:preload-log", "info", `Loaded plugin: ${plugin.manifest.id}`);
+      ipc.send(ch("preload-log"), "info", `Loaded plugin: ${plugin.manifest.id}`);
     } catch (e) {
-      ipc.send("desktop-proxy:preload-log", "error", `Plugin load failed: ${plugin.manifest.id}: ${String(e)}`);
+      ipc.send(ch("preload-log"), "error", `Plugin load failed: ${plugin.manifest.id}: ${String(e)}`);
     }
   }
 }

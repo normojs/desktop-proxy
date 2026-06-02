@@ -408,7 +408,11 @@ DESKTOP_PROXY_LOG_LEVEL=debug   # debug | info | warn | error | silent
 - 渲染↔主进程的 IPC 通道本就对页面脚本不可见——它们位于隔离的 preload 世界，
   因此不是页面检测的入口。
 - `__REACT_DEVTOOLS_GLOBAL_HOOK__` 保留，因为它与真实的 React DevTools 无法区分。
-- 每会话随机化 IPC 通道名（用于防御宿主应用自身主进程枚举 handler）**尚未实现**。
+
+隐身模式下，IPC 通道名也会**按会话随机化**（如 `dp-a1b2c3:list-plugins`，而非
+`desktop-proxy:list-plugins`），使宿主应用自身的主进程无法用已知名字枚举 handler。
+只有 `desktop-proxy:config-sync` 这个引导通道保持固定名（preload 用它来获知随机前缀）。
+注意：渲染层 `api.storage` 仍使用可见的 `localStorage` key——需要隐藏的持久化请用 `api.fs`。
 
 ---
 
