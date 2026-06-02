@@ -70,7 +70,7 @@ const { stealth, logLevel, channelPrefix } = readConfigSync();
 setChannelPrefix(channelPrefix);
 activeLogLevel = logLevel;
 setLogLevel(logLevel);
-fileLog("preload entry", { url: window.location.href, stealth, logLevel });
+fileLog("preload entry", { url: window.location.href, stealth, logLevel, channelPrefix });
 
 // Step 1: Install React hook BEFORE the app's JS bundle runs.
 // This must happen synchronously in the preload script.

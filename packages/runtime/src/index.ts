@@ -587,6 +587,9 @@ log("info", "desktop-proxy runtime initializing");
 log("info", `userRoot: ${userRoot}`);
 log("info", `runtimeDir: ${runtimeDir}`);
 log("info", `preloadPath: ${PRELOAD_PATH}`);
+// Both sides must resolve the same prefix; compare this against the preload's
+// "preload entry" log line when diagnosing IPC issues in stealth mode.
+log("info", `channelPrefix: ${CHANNEL_PREFIX} (stealth=${isStealthEnabled()})`);
 
 // Hook Electron's session system to inject our preload
 const electron = getElectron();
