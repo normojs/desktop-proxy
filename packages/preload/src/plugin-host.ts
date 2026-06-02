@@ -18,12 +18,12 @@ import type {
   PluginIPC,
   PluginNetwork,
   PluginFS,
-  PluginCDP,
+  PluginCDPCore,
   PluginApp,
   UnsubscribeFn,
   LogLevel,
 } from "@desktop-proxy/plugin-sdk";
-import { isLevelEnabled } from "@desktop-proxy/plugin-sdk";
+import { isLevelEnabled, createCDP } from "@desktop-proxy/plugin-sdk";
 
 import type { IpcRenderer, IpcRendererEvent } from "electron";
 
@@ -197,7 +197,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
     stat: (p) => ipc.invoke("desktop-proxy:fs:stat", id, p),
   };
 
-  const cdp = createCDPApi(id, manifest, ipc);
+  const cdp = createCDP(createRendererCDPCore(id, manifest, ipc));
 
   const app: PluginApp = {
     getInfo: async () => ipc.invoke("desktop-proxy:app-info"),
@@ -219,13 +219,15 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
   };
 }
 
-// ── CDP API (renderer) ───────────────────────────────────────────────────────
+// ── CDP core (renderer) ──────────────────────────────────────────────────────
+// Targets the plugin's own webContents over IPC. The shared createCDP() layers
+// evaluate()/onResponse()/onRequestPaused() on top of this core.
 
-function createCDPApi(
+function createRendererCDPCore(
   id: string,
   manifest: PluginManifest,
   ipc: IpcRenderer,
-): PluginCDP {
+): PluginCDPCore {
   const granted = Array.isArray(manifest.permissions) && manifest.permissions.includes("cdp");
 
   // Per-plugin event routing: one shared ipc listener dispatches to handlers
@@ -262,7 +264,7 @@ function createCDPApi(
       requireGrant();
       return ipc.invoke("desktop-proxy:cdp:isAttached");
     },
-    send: async <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
+    send: async <T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> => {
       requireGrant();
       return ipc.invoke("desktop-proxy:cdp:send", method, params) as Promise<T>;
     },
@@ -273,15 +275,6 @@ function createCDPApi(
       if (!set) handlers.set(event, (set = new Set()));
       set.add(handler);
       return () => { set?.delete(handler); };
-    },
-    evaluate: async <T>(expression: string, options?: { awaitPromise?: boolean; returnByValue?: boolean }): Promise<T> => {
-      requireGrant();
-      const result = (await ipc.invoke("desktop-proxy:cdp:send", "Runtime.evaluate", {
-        expression,
-        awaitPromise: options?.awaitPromise ?? true,
-        returnByValue: options?.returnByValue ?? true,
-      })) as { result?: { value?: unknown } };
-      return result?.result?.value as T;
     },
   };
 }

@@ -2,12 +2,13 @@
  * Main-process Chrome DevTools Protocol (CDP) hub.
  *
  * Rather than opening a remote-debugging port (a network-visible, unauthenticated
- * surface), we use Electron's in-process `webContents.debugger`. The main process
- * attaches the debugger to a target webContents, forwards CDP events back to that
- * renderer over IPC (`desktop-proxy:cdp:event`), and relays `sendCommand` calls.
+ * surface), we use Electron's in-process `webContents.debugger`. The hub attaches
+ * the debugger to a target webContents and fans CDP events out to registered
+ * listeners (`onEvent`). The runtime forwards those events to the owning renderer
+ * over IPC, and main-process plugins subscribe in-process via the same `onEvent`.
  *
  * This is universal (no launch flags, no fuse changes), keeps the protocol off
- * the network, and targets exactly the renderer that asked for it.
+ * the network, and targets exactly the webContents that asked for it.
  */
 
 import type { WebContents } from "electron";
@@ -19,14 +20,33 @@ export interface MainCDP {
   detach(wc: WebContents): void;
   isAttached(wc: WebContents): boolean;
   send(wc: WebContents, method: string, params?: Record<string, unknown>): Promise<unknown>;
+  /** Subscribe to all CDP events for a webContents. Returns an unsubscribe fn. */
+  onEvent(wc: WebContents, handler: (method: string, params: unknown) => void): () => void;
 }
 
 const PROTOCOL_VERSION = "1.3";
-const EVENT_CHANNEL = "desktop-proxy:cdp:event";
 
 export function createMainCDP(log: Logger): MainCDP {
-  // webContents ids we attached ourselves (vs. DevTools).
   const attached = new Set<number>();
+  const dispatchers = new Map<number, Set<(method: string, params: unknown) => void>>();
+
+  function dispatch(id: number, method: string, params: unknown): void {
+    const set = dispatchers.get(id);
+    if (set) {
+      for (const handler of set) {
+        try {
+          handler(method, params);
+        } catch {
+          // a listener error must not break event delivery
+        }
+      }
+    }
+  }
+
+  function cleanup(id: number): void {
+    attached.delete(id);
+    dispatchers.delete(id);
+  }
 
   return {
     async attach(wc: WebContents): Promise<void> {
@@ -37,17 +57,12 @@ export function createMainCDP(log: Logger): MainCDP {
         );
       }
 
-      // Synchronous; throws on failure → rejects this promise.
-      wc.debugger.attach(PROTOCOL_VERSION);
+      wc.debugger.attach(PROTOCOL_VERSION); // throws on failure → rejects
       attached.add(wc.id);
 
-      wc.debugger.on("message", (_event, method, params) => {
-        if (!wc.isDestroyed()) {
-          wc.send(EVENT_CHANNEL, { method, params });
-        }
-      });
-      wc.debugger.once("detach", () => attached.delete(wc.id));
-      wc.once("destroyed", () => attached.delete(wc.id));
+      wc.debugger.on("message", (_event, method, params) => dispatch(wc.id, method, params));
+      wc.debugger.once("detach", () => cleanup(wc.id));
+      wc.once("destroyed", () => cleanup(wc.id));
 
       log("info", `CDP: attached to webContents ${wc.id}`);
     },
@@ -60,7 +75,7 @@ export function createMainCDP(log: Logger): MainCDP {
           log("warn", `CDP: detach failed for wc ${wc.id}:`, String(e));
         }
       }
-      attached.delete(wc.id);
+      cleanup(wc.id);
     },
 
     isAttached(wc: WebContents): boolean {
@@ -69,6 +84,15 @@ export function createMainCDP(log: Logger): MainCDP {
 
     async send(wc: WebContents, method: string, params?: Record<string, unknown>): Promise<unknown> {
       return wc.debugger.sendCommand(method, params ?? {});
+    },
+
+    onEvent(wc: WebContents, handler: (method: string, params: unknown) => void): () => void {
+      let set = dispatchers.get(wc.id);
+      if (!set) dispatchers.set(wc.id, (set = new Set()));
+      set.add(handler);
+      return () => {
+        set?.delete(handler);
+      };
     },
   };
 }

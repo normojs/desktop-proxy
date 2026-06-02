@@ -288,7 +288,7 @@ module.exports = {
 | `api.ipc` | 主进程与渲染进程间带命名空间的 `on` / `send` / `invoke`。 |
 | `api.network` | `onRequest` / `onResponse` 拦截钩子。 |
 | `api.fs` | 限定在插件数据目录内的沙盒文件 I/O：`read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat`（utf8 或 base64）。 |
-| `api.cdp` | 针对插件自身渲染进程的 Chrome DevTools Protocol（`attach` / `send` / `on` / `evaluate`）。需要 `"cdp"` 权限。 |
+| `api.cdp` | Chrome DevTools Protocol：`attach`/`send`/`on`/`evaluate`，外加 `onResponse`/`onRequestPaused` 便捷封装。渲染进程指向自身 webContents；主进程指向聚焦窗口。需要 `"cdp"` 权限。 |
 | `api.app` | `getInfo()` 与 `getWindows()`。 |
 
 ### 示例：内置的 request interceptor
@@ -318,8 +318,29 @@ api.cdp.on("Network.responseReceived", (p) => api.log.info("response", p));
 const title = await api.cdp.evaluate("document.title"); // 在页面主世界执行
 ```
 
-CDP 能力很强（可完整查看/控制页面），因此用 manifest 权限门控，并限定在插件自身的
-webContents。如果该窗口已打开 DevTools，`attach()` 会失败。
+便捷封装包装了 Network 与 Fetch domain：
+
+```js
+await api.cdp.attach();
+
+// 观察响应，并按需懒加载响应体
+await api.cdp.onResponse(async (res) => {
+  if (res.url.includes("/api/")) {
+    const { body } = await res.getBody();
+    api.log.info(res.status, res.url, body.slice(0, 200));
+  }
+});
+
+// 拦截并改写/拦阻请求
+await api.cdp.onRequestPaused((req, ctl) => {
+  if (req.url.endsWith("/blocked")) return ctl.fail("BlockedByClient");
+  ctl.continue();
+});
+```
+
+CDP 能力很强（可完整查看/控制页面），因此用 manifest 权限门控。渲染进程的 `api.cdp`
+限定在插件自身的 webContents；对**主进程插件**则指向聚焦窗口（或第一个可用窗口）。
+如果该窗口已打开 DevTools，`attach()` 会失败。
 
 ---
 

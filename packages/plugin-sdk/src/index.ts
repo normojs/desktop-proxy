@@ -172,21 +172,141 @@ export interface CDPEvaluateOptions {
 }
 
 /**
- * Low-level Chrome DevTools Protocol access for the plugin's own renderer.
- * Requires the "cdp" permission in the plugin manifest. Backed by Electron's
- * in-process `webContents.debugger` (no remote debugging port).
- *
- * Remember to enable the relevant CDP domain (e.g. `send("Network.enable")`)
- * before its events will be delivered to `on(...)`.
+ * The minimal CDP surface each process implements (renderer targets its own
+ * webContents; main targets the focused/first window). Requires the "cdp"
+ * permission. Backed by Electron's in-process `webContents.debugger` (no remote
+ * debugging port). Enable the relevant domain (e.g. `send("Network.enable")`)
+ * before its events are delivered to `on(...)`.
  */
-export interface PluginCDP {
+export interface PluginCDPCore {
   attach(): Promise<void>;
   detach(): Promise<void>;
   isAttached(): Promise<boolean>;
   send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
   on(event: string, handler: (params: unknown) => void): UnsubscribeFn;
+}
+
+export interface CDPResponseMeta {
+  requestId: string;
+  url: string;
+  status: number;
+  mimeType: string;
+  headers: Record<string, string>;
+  /** Fetch the response body (available once the response has finished loading). */
+  getBody(): Promise<{ body: string; base64Encoded: boolean }>;
+}
+
+export interface CDPInterceptedRequest {
+  requestId: string;
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  resourceType: string;
+}
+
+export interface CDPFulfillResponse {
+  responseCode: number;
+  responseHeaders?: { name: string; value: string }[];
+  /** Response body, base64-encoded. */
+  body?: string;
+}
+
+export interface CDPRequestControl {
+  continue(): Promise<void>;
+  fulfill(response: CDPFulfillResponse): Promise<void>;
+  fail(errorReason?: string): Promise<void>;
+}
+
+export interface PluginCDP extends PluginCDPCore {
   /** Convenience wrapper around `Runtime.evaluate` (runs in the page's main world). */
   evaluate<T = unknown>(expression: string, options?: CDPEvaluateOptions): Promise<T>;
+  /** Enable the Network domain and observe responses; `getBody()` fetches lazily. */
+  onResponse(handler: (response: CDPResponseMeta) => void): Promise<UnsubscribeFn>;
+  /** Enable the Fetch domain and intercept requests; resolve each via the control object. */
+  onRequestPaused(
+    handler: (request: CDPInterceptedRequest, control: CDPRequestControl) => void,
+  ): Promise<UnsubscribeFn>;
+}
+
+/** Build the full CDP API (evaluate + Network/Fetch helpers) from the core methods. */
+export function createCDP(core: PluginCDPCore): PluginCDP {
+  return {
+    attach: () => core.attach(),
+    detach: () => core.detach(),
+    isAttached: () => core.isAttached(),
+    send: <T = unknown>(method: string, params?: Record<string, unknown>) => core.send<T>(method, params),
+    on: (event, handler) => core.on(event, handler),
+
+    evaluate: async <T = unknown>(expression: string, options?: CDPEvaluateOptions): Promise<T> => {
+      const result = await core.send<{ result?: { value?: unknown } }>("Runtime.evaluate", {
+        expression,
+        awaitPromise: options?.awaitPromise ?? true,
+        returnByValue: options?.returnByValue ?? true,
+      });
+      return result?.result?.value as T;
+    },
+
+    onResponse: async (handler) => {
+      await core.send("Network.enable");
+      return core.on("Network.responseReceived", (params) => {
+        const p = params as {
+          requestId: string;
+          response: { url: string; status: number; mimeType: string; headers?: Record<string, string> };
+        };
+        handler({
+          requestId: p.requestId,
+          url: p.response.url,
+          status: p.response.status,
+          mimeType: p.response.mimeType,
+          headers: p.response.headers ?? {},
+          getBody: () =>
+            core.send<{ body: string; base64Encoded: boolean }>("Network.getResponseBody", {
+              requestId: p.requestId,
+            }),
+        });
+      });
+    },
+
+    onRequestPaused: async (handler) => {
+      await core.send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
+      return core.on("Fetch.requestPaused", (params) => {
+        const p = params as {
+          requestId: string;
+          request: { url: string; method: string; headers?: Record<string, string> };
+          resourceType: string;
+        };
+        handler(
+          {
+            requestId: p.requestId,
+            url: p.request.url,
+            method: p.request.method,
+            headers: p.request.headers ?? {},
+            resourceType: p.resourceType,
+          },
+          {
+            continue: () =>
+              core.send("Fetch.continueRequest", { requestId: p.requestId }).then(() => undefined),
+            fulfill: (r) =>
+              core
+                .send("Fetch.fulfillRequest", {
+                  requestId: p.requestId,
+                  responseCode: r.responseCode,
+                  responseHeaders: r.responseHeaders,
+                  body: r.body,
+                })
+                .then(() => undefined),
+            fail: (errorReason) =>
+              core
+                .send("Fetch.failRequest", {
+                  requestId: p.requestId,
+                  errorReason: errorReason ?? "Failed",
+                })
+                .then(() => undefined),
+          },
+        );
+      });
+    },
+  };
 }
 
 // ── App Info ─────────────────────────────────────────────────────────────────

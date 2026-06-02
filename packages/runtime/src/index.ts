@@ -10,6 +10,9 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 
+import { createCDP } from "@desktop-proxy/plugin-sdk";
+import type { PluginCDPCore } from "@desktop-proxy/plugin-sdk";
+
 import { createMainNetwork, type MainNetwork } from "./network";
 import { createMainCDP, type MainCDP } from "./cdp";
 import { createLogger, parseLevel, type Logger } from "./logger";
@@ -144,6 +147,57 @@ function getMainCDP(): MainCDP {
     _mainCDP = createMainCDP(log);
   }
   return _mainCDP;
+}
+
+// CDP core for a main-process plugin. Targets the focused window (or the first
+// available one), caching the webContents across calls so attach/send/on agree.
+function createMainCDPCore(
+  manifest: import("@desktop-proxy/plugin-sdk").PluginManifest,
+): PluginCDPCore {
+  const granted = Array.isArray(manifest.permissions) && manifest.permissions.includes("cdp");
+  const hub = getMainCDP();
+  let cached: Electron.WebContents | null = null;
+
+  function target(): Electron.WebContents {
+    if (cached && !cached.isDestroyed()) return cached;
+    const electron = getElectron();
+    const wc =
+      electron.BrowserWindow.getFocusedWindow()?.webContents ??
+      electron.BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())?.webContents ??
+      null;
+    if (!wc) throw new Error("cdp: no available window to attach to");
+    cached = wc;
+    return wc;
+  }
+
+  function requireGrant(): void {
+    if (!granted) throw new Error(`Plugin ${manifest.id} lacks the "cdp" permission`);
+  }
+
+  return {
+    attach: async () => {
+      requireGrant();
+      await hub.attach(target());
+    },
+    detach: async () => {
+      requireGrant();
+      hub.detach(target());
+    },
+    isAttached: async () => {
+      requireGrant();
+      return hub.isAttached(target());
+    },
+    send: async <T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> => {
+      requireGrant();
+      return hub.send(target(), method, params) as Promise<T>;
+    },
+    on: (event: string, handler: (params: unknown) => void) => {
+      requireGrant();
+      return hub.onEvent(target(), (method, params) => {
+        if (method === event) handler(params);
+      });
+    },
+  };
 }
 
 // ── Preload Registration ─────────────────────────────────────────────────────
@@ -313,15 +367,7 @@ function createMainProcessAPI(manifest: import("@desktop-proxy/plugin-sdk").Plug
         stat: async (p: string) => fsStat(root, p),
       };
     })(),
-    // CDP is renderer-scoped in v1 (no main-process target). Surface clear errors.
-    cdp: {
-      attach: async () => { throw new Error("cdp is not available to main-process plugins"); },
-      detach: async () => {},
-      isAttached: async () => false,
-      send: async () => { throw new Error("cdp is not available to main-process plugins"); },
-      on: () => () => {},
-      evaluate: async () => { throw new Error("cdp is not available to main-process plugins"); },
-    },
+    cdp: createCDP(createMainCDPCore(manifest)),
     app: {
       getInfo: async () => {
         return {
@@ -468,8 +514,20 @@ function setupIPCBridge(): void {
 
   // Chrome DevTools Protocol — attached to the calling renderer's webContents.
   // Permission gating happens preload-side; events flow back via desktop-proxy:cdp:event.
+  const cdpForwarded = new Set<number>();
   electron.ipcMain.handle("desktop-proxy:cdp:attach", async (e) => {
-    await getMainCDP().attach(e.sender);
+    const wc = e.sender;
+    await getMainCDP().attach(wc);
+    if (!cdpForwarded.has(wc.id)) {
+      cdpForwarded.add(wc.id);
+      const off = getMainCDP().onEvent(wc, (method, params) => {
+        if (!wc.isDestroyed()) wc.send("desktop-proxy:cdp:event", { method, params });
+      });
+      wc.once("destroyed", () => {
+        off();
+        cdpForwarded.delete(wc.id);
+      });
+    }
   });
   electron.ipcMain.handle("desktop-proxy:cdp:detach", async (e) => {
     getMainCDP().detach(e.sender);

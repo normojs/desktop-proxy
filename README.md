@@ -294,7 +294,7 @@ re-runs renderer plugins when files change.
 | `api.ipc` | Namespaced `on` / `send` / `invoke` between main and renderer. |
 | `api.network` | `onRequest` / `onResponse` interception hooks. |
 | `api.fs` | Sandboxed file I/O confined to the plugin's data dir: `read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat` (utf8 or base64). |
-| `api.cdp` | Chrome DevTools Protocol for the plugin's own renderer (`attach` / `send` / `on` / `evaluate`). Requires the `"cdp"` permission. |
+| `api.cdp` | Chrome DevTools Protocol: `attach`/`send`/`on`/`evaluate` plus `onResponse`/`onRequestPaused` helpers. Renderer targets its own webContents; main targets the focused window. Requires the `"cdp"` permission. |
 | `api.app` | `getInfo()` and `getWindows()`. |
 
 ### Example: the bundled request interceptor
@@ -327,9 +327,30 @@ api.cdp.on("Network.responseReceived", (p) => api.log.info("response", p));
 const title = await api.cdp.evaluate("document.title"); // runs in the page's main world
 ```
 
+Convenience helpers wrap the Network and Fetch domains:
+
+```js
+await api.cdp.attach();
+
+// Observe responses and fetch bodies lazily
+await api.cdp.onResponse(async (res) => {
+  if (res.url.includes("/api/")) {
+    const { body } = await res.getBody();
+    api.log.info(res.status, res.url, body.slice(0, 200));
+  }
+});
+
+// Intercept and rewrite/block requests
+await api.cdp.onRequestPaused((req, ctl) => {
+  if (req.url.endsWith("/blocked")) return ctl.fail("BlockedByClient");
+  ctl.continue();
+});
+```
+
 CDP is powerful (full page inspection/control), so it is gated behind the
-manifest permission and confined to the plugin's own webContents. `attach()`
-fails if DevTools is already open on that window.
+manifest permission. The renderer's `api.cdp` is confined to the plugin's own
+webContents; for **main-process plugins** it targets the focused window (or the
+first available one). `attach()` fails if DevTools is already open on that window.
 
 ---
 
