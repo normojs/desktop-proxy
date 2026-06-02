@@ -158,6 +158,9 @@ node packages/installer/dist/cli.js <command> [options]
 | `plugin enable\|disable <id>` | Enable/disable a plugin (applied live if the app is running). |
 | `config get [key] [--json]` | Print the config (or a single key). |
 | `config set <key> <value>` | Set a config key (`logLevel`, `stealth`, `safeMode`, `autoUpdate`). |
+| `watch install\|uninstall\|status` | Auto re-apply the patch when the app updates (macOS). |
+| `create-plugin <dir>` | Scaffold a new plugin (`--id` / `--name` / `--scope`). |
+| `validate-plugin <dir> [--json]` | Validate a plugin's manifest and entry file. |
 
 **Options:**
 
@@ -229,6 +232,13 @@ A plugin is a folder under `~/.desktop-proxy/plugins/` with a manifest and an en
 my-plugin/
   manifest.json
   index.js
+```
+
+Scaffold and validate one with the CLI:
+
+```bash
+node packages/installer/dist/cli.js create-plugin ./my-plugin --name "My Plugin"
+node packages/installer/dist/cli.js validate-plugin ./my-plugin
 ```
 
 **`manifest.json`**
@@ -391,7 +401,10 @@ at preload time.)
 - **Backups** — originals are copied to `~/.desktop-proxy/backup/` before patching;
   `uninstall` restores them.
 - **Repair** — re-applies the patch after the target app auto-updates (which
-  usually wipes it).
+  usually wipes it). `repair --if-needed` only acts when the patch is missing.
+- **Auto-repair watcher** — `watch install` registers a macOS LaunchAgent
+  (launchd `WatchPaths`) that runs `repair --if-needed` whenever the app's
+  `app.asar` changes, so updates are healed automatically.
 - **Capped logs** — log files are trimmed to a 10 MB rolling cap.
 
 ---
@@ -501,7 +514,8 @@ logic — the highest-risk parts that are hard to eyeball:
 
 Tests live in each package's `test/` directory (excluded from the `tsc` build).
 Electron/DOM-dependent code (sessions, `webContents.debugger`, the overlay) is
-not unit-tested here.
+not unit-tested here. A GitHub Actions workflow (`.github/workflows/ci.yml`)
+runs build + typecheck + test on every push and pull request.
 
 ### Status / known gaps
 

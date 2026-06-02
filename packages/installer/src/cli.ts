@@ -23,6 +23,8 @@ import { status } from "./commands/status.js";
 import { repair } from "./commands/repair.js";
 import { logs } from "./commands/logs.js";
 import { pluginList, pluginSetEnabled, configGet, configSet, doctor } from "./commands/manage.js";
+import { installWatcher, uninstallWatcher, watcherStatus } from "./commands/watch.js";
+import { createPlugin, validatePlugin } from "./commands/scaffold.js";
 
 function printHelp(): void {
   console.log(`
@@ -41,14 +43,21 @@ Usage:
   desktop-proxy plugin disable <id>   Disable a plugin
   desktop-proxy config get [key]      Print config (or a single key)
   desktop-proxy config set <key> <v>  Set a config key (logLevel, stealth, safeMode, autoUpdate)
+  desktop-proxy watch install         Auto re-apply the patch when the app updates (macOS)
+  desktop-proxy watch uninstall       Remove the auto-repair watcher
+  desktop-proxy watch status          Show watcher state
+  desktop-proxy create-plugin <dir>   Scaffold a new plugin
+  desktop-proxy validate-plugin <dir> Validate a plugin's manifest and entry
 
 Options:
   --app <path>      Path to the .app bundle (auto-detected if omitted)
   --no-fuse         Skip Electron fuse flipping
   --no-resign       Skip code re-signing (macOS)
+  --if-needed       repair only if the app is not already patched
   --follow, -f      Follow the log output (logs command)
   --lines <n>       Number of lines to print (logs command, default 200)
-  --json            Machine-readable output (doctor, plugin list, config get)
+  --id/--name/--scope <v>  create-plugin manifest fields
+  --json            Machine-readable output (doctor, plugin/config/validate)
   --quiet           Suppress progress output
   --verbose         Show detailed output
 
@@ -92,10 +101,18 @@ async function main(): Promise<void> {
       opts.noFuse = true;
     } else if (a === "--no-resign") {
       opts.noResign = true;
+    } else if (a === "--if-needed") {
+      opts.ifNeeded = true;
     } else if (a === "--follow" || a === "-f") {
       opts.follow = true;
     } else if (a === "--lines" && args[i + 1]) {
       opts.lines = Number(args[++i]);
+    } else if (a === "--id" && args[i + 1]) {
+      opts.id = args[++i];
+    } else if (a === "--name" && args[i + 1]) {
+      opts.name = args[++i];
+    } else if (a === "--scope" && args[i + 1]) {
+      opts.scope = args[++i];
     } else if (a === "--json") {
       opts.json = true;
     } else if (a === "--quiet") {
@@ -145,6 +162,7 @@ async function main(): Promise<void> {
       await repair({
         app: opts.app as string | undefined,
         quiet: opts.quiet as boolean | undefined,
+        ifNeeded: opts.ifNeeded as boolean | undefined,
       });
       break;
 
@@ -193,6 +211,34 @@ async function main(): Promise<void> {
       }
       break;
     }
+
+    case "watch": {
+      const sub = positionals[1];
+      if (sub === "install") {
+        installWatcher({ app: opts.app as string | undefined, json });
+      } else if (sub === "uninstall") {
+        uninstallWatcher({ json });
+      } else if (sub === "status") {
+        watcherStatus({ json });
+      } else {
+        console.error(`Unknown watch subcommand: ${sub ?? "(none)"}. Use: install | uninstall | status`);
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "create-plugin":
+      createPlugin(positionals[1], {
+        id: opts.id as string | undefined,
+        name: opts.name as string | undefined,
+        scope: opts.scope as string | undefined,
+        json,
+      });
+      break;
+
+    case "validate-plugin":
+      validatePlugin(positionals[1], json);
+      break;
 
     default:
       console.error(`Unknown command: ${command}`);
