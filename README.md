@@ -29,6 +29,7 @@ It is a generalization of the [Codex++](./third-project/codex-plusplus) approach
 - [Writing Plugins](#writing-plugins)
 - [Plugin API](#plugin-api)
 - [Safety & Recovery](#safety--recovery)
+- [Stealth Mode](#stealth-mode)
 - [Platform Support](#platform-support)
 - [Development Notes](#development-notes)
 
@@ -338,6 +339,36 @@ fails if DevTools is already open on that window.
 - **Repair** — re-applies the patch after the target app auto-updates (which
   usually wipes it).
 - **Capped logs** — log files are trimmed to a 10 MB rolling cap.
+
+---
+
+## Stealth Mode
+
+By default the framework leaves an easily inspectable footprint (a visible
+launcher button, named globals, JS-patched `fetch`/`XHR`). For target apps that
+actively detect injection, enable stealth in `~/.desktop-proxy/config.json`:
+
+```json
+{ "stealth": true }
+```
+
+With stealth on:
+
+- patched `fetch` / `XMLHttpRequest` report native source via `fn.toString()`
+  (the most common detection check);
+- the framework's marker globals (`window.__desktop_proxy__`, the overlay handle)
+  are not exposed — internals stay in closures;
+- the settings overlay uses a **closed** shadow root with no identifying
+  attribute, and the launcher button is hidden (open it with **Cmd/Ctrl+Shift+\\**).
+
+What stealth does **not** change, and why:
+
+- The renderer↔main IPC channels are already invisible to page scripts — they
+  live in the isolated preload world, so they are not a page-detection vector.
+- `__REACT_DEVTOOLS_GLOBAL_HOOK__` is kept because it is indistinguishable from
+  real React DevTools.
+- Per-session randomization of IPC channel names (defense against the host app's
+  own main process enumerating handlers) is not yet implemented.
 
 ---
 

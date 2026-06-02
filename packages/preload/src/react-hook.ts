@@ -37,11 +37,19 @@ declare global {
   }
 }
 
-export function installReactHook(): void {
+// Renderers are tracked in module scope so fiber lookups work even in stealth
+// mode (where we avoid exposing window.__desktop_proxy__).
+let installedRenderers: Map<number, ReactRenderer> | null = null;
+
+export function installReactHook(stealth = false): void {
   // Don't overwrite if already installed (e.g. by real React DevTools)
-  if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__) return;
+  if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+    installedRenderers = window.__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers ?? installedRenderers;
+    return;
+  }
 
   const renderers = new Map<number, ReactRenderer>();
+  installedRenderers = renderers;
   let nextId = 1;
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
@@ -82,14 +90,18 @@ export function installReactHook(): void {
     value: hook,
   });
 
-  window.__desktop_proxy__ = { hook, renderers };
+  // The DevTools hook itself is indistinguishable from real React DevTools, so
+  // it stays. Our own marker global is only exposed outside stealth mode.
+  if (!stealth) {
+    window.__desktop_proxy__ = { hook, renderers };
+  }
 }
 
 /**
  * Resolve the React fiber for a DOM node, if any renderer has one.
  */
 export function fiberForNode(node: Node): unknown {
-  const renderers = window.__desktop_proxy__?.renderers;
+  const renderers = installedRenderers ?? window.__desktop_proxy__?.renderers;
   if (renderers) {
     for (const r of renderers.values()) {
       const fiber = r.findFiberByHostInstance?.(node);

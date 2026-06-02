@@ -68,6 +68,8 @@ function log(level: string, ...args: unknown[]): void {
 interface Config {
   autoUpdate?: boolean;
   safeMode?: boolean;
+  /** When true, minimize the framework's detectable footprint in renderers. */
+  stealth?: boolean;
   plugins?: Record<string, { enabled: boolean }>;
 }
 
@@ -89,6 +91,10 @@ function writeConfig(c: Config): void {
 
 function isSafeModeEnabled(): boolean {
   return fs.existsSync(SAFE_MODE_FILE) || readConfig().safeMode === true;
+}
+
+function isStealthEnabled(): boolean {
+  return readConfig().stealth === true;
 }
 
 function isPluginEnabled(id: string): boolean {
@@ -422,6 +428,12 @@ function setupIPCBridge(): void {
   // Preload log forwarding (renderer → main log file)
   electron.ipcMain.on("desktop-proxy:preload-log", (_e, level: string, msg: string) => {
     log(level, `[preload]`, msg);
+  });
+
+  // Synchronous config read — the preload needs the stealth flag *before* it
+  // installs any hooks (which happens synchronously at preload evaluation).
+  electron.ipcMain.on("desktop-proxy:config-sync", (e) => {
+    e.returnValue = { stealth: isStealthEnabled() };
   });
 
   // Sandboxed filesystem — renderer plugins reach disk through these handlers.

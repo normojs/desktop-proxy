@@ -123,10 +123,11 @@ const STYLE = `
 .dp-section-body { padding: 4px; }
 `;
 
-export function installSettingsOverlay(): SettingsOverlayHandle {
-  const existing = (window as unknown as { __desktop_proxy_overlay__?: SettingsOverlayHandle })
-    .__desktop_proxy_overlay__;
-  if (existing) return existing;
+let installedHandle: SettingsOverlayHandle | null = null;
+
+export function installSettingsOverlay(opts: { stealth?: boolean } = {}): SettingsOverlayHandle {
+  if (installedHandle) return installedHandle;
+  const stealth = opts.stealth === true;
 
   const sections: RegisteredSection[] = [];
   const pages: RegisteredPage[] = [];
@@ -135,8 +136,9 @@ export function installSettingsOverlay(): SettingsOverlayHandle {
 
   // ── Shadow host ────────────────────────────────────────────────────────────
   const host = document.createElement("div");
-  host.setAttribute("data-desktop-proxy", "settings-overlay");
-  const shadow = host.attachShadow({ mode: "open" });
+  if (!stealth) host.setAttribute("data-desktop-proxy", "settings-overlay");
+  // A closed shadow root hides our UI from `host.shadowRoot` inspection.
+  const shadow = host.attachShadow({ mode: stealth ? "closed" : "open" });
 
   const style = document.createElement("style");
   style.textContent = STYLE;
@@ -146,6 +148,8 @@ export function installSettingsOverlay(): SettingsOverlayHandle {
   launcher.className = "dp-launcher";
   launcher.textContent = "DP";
   launcher.title = "desktop-proxy settings (Cmd/Ctrl+Shift+\\)";
+  // In stealth mode the panel is reachable only via the hotkey.
+  if (stealth) launcher.style.display = "none";
 
   const backdrop = document.createElement("div");
   backdrop.className = "dp-backdrop";
@@ -375,8 +379,11 @@ export function installSettingsOverlay(): SettingsOverlayHandle {
     toggle,
   };
 
-  (window as unknown as { __desktop_proxy_overlay__?: SettingsOverlayHandle }).__desktop_proxy_overlay__ =
-    handle;
+  installedHandle = handle;
+  if (!stealth) {
+    (window as unknown as { __desktop_proxy_overlay__?: SettingsOverlayHandle }).__desktop_proxy_overlay__ =
+      handle;
+  }
 
   return handle;
 }

@@ -11,6 +11,8 @@ import type {
   UnsubscribeFn,
 } from "@desktop-proxy/plugin-sdk";
 
+import { maskAsNative } from "./stealth";
+
 let requestIdCounter = 0;
 const requestHandlers: Set<NetworkRequestHandler> = new Set();
 const responseHandlers: Set<NetworkResponseHandler> = new Set();
@@ -252,9 +254,18 @@ function hookXHR(): void {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-export function installNetworkInterceptor(): void {
+export function installNetworkInterceptor(stealth = false): void {
   hookFetch();
   hookXHR();
+
+  if (stealth) {
+    // Make the patched built-ins report native source under fn.toString().
+    maskAsNative(window.fetch as unknown as (...args: unknown[]) => unknown, "fetch");
+    const proto = window.XMLHttpRequest.prototype;
+    maskAsNative(proto.open as unknown as (...args: unknown[]) => unknown, "open");
+    maskAsNative(proto.send as unknown as (...args: unknown[]) => unknown, "send");
+    maskAsNative(proto.setRequestHeader as unknown as (...args: unknown[]) => unknown, "setRequestHeader");
+  }
 }
 
 export function onRequest(handler: NetworkRequestHandler): UnsubscribeFn {

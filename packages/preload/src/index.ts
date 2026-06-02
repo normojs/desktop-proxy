@@ -38,14 +38,30 @@ function fileLog(stage: string, extra?: unknown): void {
   }
 }
 
+/**
+ * Read the stealth flag synchronously. The hooks below run before any page code,
+ * so we cannot wait on an async IPC round-trip here.
+ */
+function readStealth(): boolean {
+  try {
+    const cfg = getIpcRenderer().sendSync("desktop-proxy:config-sync") as
+      | { stealth?: boolean }
+      | undefined;
+    return cfg?.stealth === true;
+  } catch {
+    return false;
+  }
+}
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
-fileLog("preload entry", { url: window.location.href });
+const stealth = readStealth();
+fileLog("preload entry", { url: window.location.href, stealth });
 
 // Step 1: Install React hook BEFORE the app's JS bundle runs.
 // This must happen synchronously in the preload script.
 try {
-  installReactHook();
+  installReactHook(stealth);
   fileLog("react hook installed");
 } catch (e) {
   fileLog("react hook install FAILED", String(e));
@@ -53,7 +69,7 @@ try {
 
 // Step 2: Install network interceptor to hook fetch/XHR.
 try {
-  installNetworkInterceptor();
+  installNetworkInterceptor(stealth);
   fileLog("network interceptor installed");
 } catch (e) {
   fileLog("network interceptor install FAILED", String(e));
@@ -68,7 +84,7 @@ function boot(): void {
   fileLog("boot start", { readyState: document.readyState });
   try {
     if (!overlay) {
-      overlay = installSettingsOverlay();
+      overlay = installSettingsOverlay({ stealth });
       setSettingsCallbacks(overlay.registerSection, overlay.registerPage);
       fileLog("settings overlay installed");
     }
