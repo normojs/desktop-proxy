@@ -1,7 +1,16 @@
 import { describe, it, expect } from "vitest";
 
-import { runInterceptors, makeControl, matchesFilter, toHeaderEntries } from "../src/net/intercept";
-import type { NetworkRequest } from "@desktop-proxy/plugin-sdk";
+import {
+  runInterceptors,
+  makeControl,
+  matchesFilter,
+  toHeaderEntries,
+  fromHeaderEntries,
+  makeResponseControl,
+  runResponseInterceptors,
+  anyResponseInterceptMatches,
+} from "../src/net/intercept";
+import type { NetworkRequest, NetworkResponse } from "@desktop-proxy/plugin-sdk";
 
 const req = (url = "https://api.x.com/v1"): NetworkRequest => ({
   id: "1",
@@ -82,11 +91,61 @@ describe("runInterceptors", () => {
   });
 });
 
-describe("toHeaderEntries", () => {
-  it("converts a record to name/value pairs", () => {
-    expect(toHeaderEntries({ a: "b", c: "d" })).toEqual([
+describe("toHeaderEntries / fromHeaderEntries", () => {
+  it("round-trips a header record", () => {
+    const entries = toHeaderEntries({ a: "b", c: "d" });
+    expect(entries).toEqual([
       { name: "a", value: "b" },
       { name: "c", value: "d" },
     ]);
+    expect(fromHeaderEntries(entries)).toEqual({ a: "b", c: "d" });
+    expect(fromHeaderEntries(undefined)).toEqual({});
+  });
+});
+
+const res = (): NetworkResponse => ({
+  id: "resp-1",
+  requestId: "1",
+  status: 200,
+  statusText: "OK",
+  headers: {},
+  body: "real",
+  timestamp: 0,
+});
+
+describe("makeResponseControl", () => {
+  it("records the first fulfill", () => {
+    const { control, getDecision } = makeResponseControl();
+    control.fulfill({ status: 201 });
+    control.continue();
+    expect(getDecision()).toEqual({ action: "fulfill", response: { status: 201 } });
+  });
+});
+
+describe("runResponseInterceptors", () => {
+  it("continues when nobody fulfills", async () => {
+    expect(await runResponseInterceptors([{ handler: () => {} }], res(), "https://x")).toEqual({
+      action: "continue",
+    });
+  });
+
+  it("first fulfill wins, respecting the url filter", async () => {
+    const d = await runResponseInterceptors(
+      [
+        { handler: (_r, c) => c.fulfill({ body: "no" }), filter: { urls: ["other"] } },
+        { handler: (_r, c) => c.fulfill({ body: "yes" }), filter: { urls: ["openai"] } },
+      ],
+      res(),
+      "https://api.openai.com/v1",
+    );
+    expect(d).toEqual({ action: "fulfill", response: { body: "yes" } });
+  });
+});
+
+describe("anyResponseInterceptMatches", () => {
+  it("matches by filter", () => {
+    const regs = [{ handler: () => {}, filter: { urls: ["openai"] } }];
+    expect(anyResponseInterceptMatches(regs, "https://api.openai.com")).toBe(true);
+    expect(anyResponseInterceptMatches(regs, "https://api.x.com")).toBe(false);
   });
 });

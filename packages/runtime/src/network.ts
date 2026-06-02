@@ -33,12 +33,21 @@ import type {
   NetworkResponse,
   NetworkResponseHandler,
   NetworkInterceptHandler,
+  NetworkResponseInterceptHandler,
   NetworkInterceptFilter,
   UnsubscribeFn,
 } from "@desktop-proxy/plugin-sdk";
 
 import { installNodeIntercept } from "./net/node-intercept";
-import { runInterceptors, type NetDecision, type InterceptRegistration } from "./net/intercept";
+import {
+  runInterceptors,
+  runResponseInterceptors,
+  anyResponseInterceptMatches,
+  type NetDecision,
+  type NetResponseDecision,
+  type InterceptRegistration,
+  type ResponseInterceptRegistration,
+} from "./net/intercept";
 
 type Logger = (level: string, ...args: unknown[]) => void;
 
@@ -57,6 +66,14 @@ export interface MainNetwork {
   dispatchIntercept(req: NetworkRequest): Promise<NetDecision>;
   /** True if any intercept handler is registered. */
   hasInterceptors(): boolean;
+  /** Register a response-rewrite handler. */
+  interceptResponse(handler: NetworkResponseInterceptHandler, filter?: NetworkInterceptFilter): UnsubscribeFn;
+  /** Run response interceptors matching the url; first to fulfill decides. */
+  dispatchInterceptResponse(res: NetworkResponse, url: string): Promise<NetResponseDecision>;
+  /** True if any response interceptor's filter matches the url (worth buffering). */
+  responseInterceptMatches(url: string): boolean;
+  /** True if any response interceptor is registered. */
+  hasResponseInterceptors(): boolean;
 }
 
 const URL_FILTER = { urls: ["*://*/*"] };
@@ -74,6 +91,7 @@ export function createMainNetwork(
   const requestHandlers = new Set<NetworkRequestHandler>();
   const responseHandlers = new Set<NetworkResponseHandler>();
   const interceptRegs = new Set<InterceptRegistration>();
+  const responseInterceptRegs = new Set<ResponseInterceptRegistration>();
 
   let ready = false;
   let requestAttached = false;
@@ -239,5 +257,16 @@ export function createMainNetwork(
     },
     dispatchIntercept: (req: NetworkRequest) => runInterceptors(interceptRegs, req),
     hasInterceptors: () => interceptRegs.size > 0,
+    interceptResponse(handler: NetworkResponseInterceptHandler, filter?: NetworkInterceptFilter): UnsubscribeFn {
+      const reg: ResponseInterceptRegistration = { handler, filter };
+      responseInterceptRegs.add(reg);
+      return () => {
+        responseInterceptRegs.delete(reg);
+      };
+    },
+    dispatchInterceptResponse: (res: NetworkResponse, url: string) =>
+      runResponseInterceptors(responseInterceptRegs, res, url),
+    responseInterceptMatches: (url: string) => anyResponseInterceptMatches(responseInterceptRegs, url),
+    hasResponseInterceptors: () => responseInterceptRegs.size > 0,
   };
 }

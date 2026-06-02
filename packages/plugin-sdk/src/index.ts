@@ -179,6 +179,24 @@ export interface NetworkInterceptFilter {
   urls?: string[];
 }
 
+/** Decide a real (already-received) response's fate. The first handler to act wins. */
+export interface NetworkResponseControl {
+  /** Pass the response through unchanged. */
+  continue(): void;
+  /** Replace parts of the response (unspecified fields keep their real values). */
+  fulfill(response: {
+    status?: number;
+    headers?: Record<string, string>;
+    body?: string;
+    bodyEncoding?: "utf8" | "base64";
+  }): void;
+}
+
+export type NetworkResponseInterceptHandler = (
+  response: NetworkResponse,
+  control: NetworkResponseControl,
+) => void | Promise<void>;
+
 export interface PluginNetwork {
   onRequest(handler: NetworkRequestHandler): UnsubscribeFn;
   onResponse(handler: NetworkResponseHandler): UnsubscribeFn;
@@ -187,6 +205,12 @@ export interface PluginNetwork {
    * Requires CDP request interception to be enabled (config `cdpIntercept`).
    */
   intercept(handler: NetworkInterceptHandler, filter?: NetworkInterceptFilter): UnsubscribeFn;
+  /**
+   * Modify real responses. Only URLs matching `filter` are buffered+rewritten
+   * (so other responses keep streaming); pass a `filter.urls` to scope it.
+   * Requires `cdpIntercept`.
+   */
+  interceptResponse(handler: NetworkResponseInterceptHandler, filter?: NetworkInterceptFilter): UnsubscribeFn;
 }
 
 // ── Sandboxed Filesystem ─────────────────────────────────────────────────────

@@ -18,7 +18,7 @@ import type { WebContents } from "electron";
 import type { NetworkRequest, NetworkResponse } from "@desktop-proxy/plugin-sdk";
 
 import type { MainCDP } from "../cdp";
-import { toHeaderEntries, type NetDecision } from "./intercept";
+import { toHeaderEntries, fromHeaderEntries, type NetDecision, type NetResponseDecision } from "./intercept";
 
 type Logger = (level: string, ...args: unknown[]) => void;
 
@@ -31,6 +31,12 @@ export interface CdpNetworkDeps {
   interceptEnabled: () => boolean;
   /** Resolve a paused request's decision (first intercept handler to act wins). */
   dispatchIntercept: (req: NetworkRequest) => Promise<NetDecision>;
+  /** True if any response-rewrite handler is registered. */
+  hasResponseInterceptors: () => boolean;
+  /** True if a response-rewrite handler targets this url (worth buffering). */
+  responseInterceptMatches: (url: string) => boolean;
+  /** Resolve a real response's rewrite decision. */
+  dispatchInterceptResponse: (res: NetworkResponse, url: string) => Promise<NetResponseDecision>;
 }
 
 const FETCH_DECISION_TIMEOUT_MS = 3000;
@@ -165,8 +171,15 @@ export function createCdpNetworkObserver(hub: MainCDP, deps: CdpNetworkDeps): Cd
       deps.log("warn", `cdp-network: Network.enable failed for wc ${wc.id}:`, String(e)),
     );
     if (deps.interceptEnabled()) {
+      // Both stages: Request for modify/block/mock; Response so matched URLs can
+      // be rewritten. Unmatched responses are continued immediately (no buffer).
       void hub
-        .send(wc, "Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] })
+        .send(wc, "Fetch.enable", {
+          patterns: [
+            { urlPattern: "*", requestStage: "Request" },
+            { urlPattern: "*", requestStage: "Response" },
+          ],
+        })
         .catch((e) => deps.log("warn", `cdp-network: Fetch.enable failed for wc ${wc.id}:`, String(e)));
     }
     wc.once("destroyed", () => observed.delete(wc.id));
@@ -175,14 +188,15 @@ export function createCdpNetworkObserver(hub: MainCDP, deps: CdpNetworkDeps): Cd
 
   async function handleFetchPaused(wc: WebContents, p: Record<string, unknown>): Promise<void> {
     const requestId = String(p.requestId);
-    // We only enable the Request stage; if a Response-stage event ever arrives,
-    // just continue it (never pause/buffer a response — that breaks streaming).
+    const request = p.request as { url: string; method: string; headers?: Record<string, unknown>; postData?: string };
+
+    // Response stage: only buffer+rewrite when a handler targets this URL;
+    // otherwise continue immediately so the body keeps streaming.
     if (p.responseStatusCode !== undefined || p.responseErrorReason !== undefined) {
-      await hub.send(wc, "Fetch.continueResponse", { requestId }).catch(() => undefined);
+      await handleResponseStage(wc, requestId, request.url, p);
       return;
     }
 
-    const request = p.request as { url: string; method: string; headers?: Record<string, unknown>; postData?: string };
     const req: NetworkRequest = {
       id: requestId,
       source: "renderer-cdp",
@@ -223,6 +237,87 @@ export function createCdpNetworkObserver(hub: MainCDP, deps: CdpNetworkDeps): Cd
     } catch (e) {
       deps.log("warn", "cdp-network: applying Fetch decision failed:", String(e));
       await hub.send(wc, "Fetch.continueRequest", { requestId }).catch(() => undefined);
+    }
+  }
+
+  async function handleResponseStage(
+    wc: WebContents,
+    requestId: string,
+    url: string,
+    p: Record<string, unknown>,
+  ): Promise<void> {
+    // Fast path: nobody wants to rewrite this URL — keep streaming.
+    if (!deps.hasResponseInterceptors() || !deps.responseInterceptMatches(url)) {
+      await hub.send(wc, "Fetch.continueResponse", { requestId }).catch(() => undefined);
+      return;
+    }
+
+    const status = Number(p.responseStatusCode ?? 0);
+    const headers = fromHeaderEntries(p.responseHeaders as Array<{ name: string; value: string }> | undefined);
+
+    // Buffer the real body (the cost of rewriting — only for matched URLs).
+    let originalBase64 = "";
+    let handlerBody: string | null = null;
+    let handlerEncoding: "utf8" | "base64" = "utf8";
+    let truncated = false;
+    try {
+      const res = (await hub.send(wc, "Fetch.getResponseBody", { requestId })) as {
+        body: string;
+        base64Encoded: boolean;
+      };
+      originalBase64 = res.base64Encoded ? res.body : Buffer.from(res.body, "utf8").toString("base64");
+      let raw = Buffer.from(res.body, res.base64Encoded ? "base64" : "utf8");
+      const cap = deps.maxBodyBytes();
+      if (cap > 0 && raw.length > cap) {
+        raw = raw.subarray(0, cap);
+        truncated = true;
+      }
+      handlerBody = res.base64Encoded ? raw.toString("base64") : raw.toString("utf8");
+      handlerEncoding = res.base64Encoded ? "base64" : "utf8";
+    } catch {
+      // body unavailable; handler still sees headers/status
+    }
+
+    const networkResponse: NetworkResponse = {
+      id: `resp-${requestId}`,
+      requestId,
+      source: "renderer-cdp",
+      status,
+      statusText: "",
+      headers,
+      body: handlerBody,
+      bodyEncoding: handlerEncoding,
+      truncated,
+      timestamp: Date.now(),
+    };
+
+    let decision: NetResponseDecision = { action: "continue" };
+    try {
+      decision = await withTimeout(
+        deps.dispatchInterceptResponse(networkResponse, url),
+        FETCH_DECISION_TIMEOUT_MS,
+        { action: "continue" },
+      );
+    } catch (e) {
+      deps.log("error", "cdp-network: response intercept dispatch failed:", String(e));
+    }
+
+    try {
+      if (decision.action === "fulfill") {
+        const r = decision.response;
+        const body = r.body != null ? encodeBody(r.body, r.bodyEncoding) : originalBase64;
+        await hub.send(wc, "Fetch.fulfillRequest", {
+          requestId,
+          responseCode: r.status ?? status,
+          responseHeaders: toHeaderEntries(r.headers ?? headers),
+          body,
+        });
+      } else {
+        await hub.send(wc, "Fetch.continueResponse", { requestId });
+      }
+    } catch (e) {
+      deps.log("warn", "cdp-network: applying response decision failed:", String(e));
+      await hub.send(wc, "Fetch.continueResponse", { requestId }).catch(() => undefined);
     }
   }
 

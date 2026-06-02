@@ -312,7 +312,7 @@ module.exports = {
 | `api.settings` | `registerSection` / `registerPage`，渲染到框架的浮层面板。 |
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement`（渲染进程）。 |
 | `api.ipc` | 主进程与渲染进程间带命名空间的 `on` / `send` / `invoke`。 |
-| `api.network` | `onRequest` / `onResponse` 观察钩子，外加 `intercept(handler, filter?)` 完整控制——`continue(改写)` / `fulfill(mock)` / `fail(拦阻)`。观察为流式安全、按 `maxResponseBodyBytes` 截断、二进制跳过、带 `source` 标签。主作用域插件还能看到 `webRequest` 看不到的 Node `http`/`https`；开启 `cdpNetwork` 后经 CDP 看到所有渲染层请求（`contextIsolation` 下也有效）。`intercept` 在开启 `cdpIntercept` 后由主进程经 CDP Fetch 执行。 |
+| `api.network` | `onRequest` / `onResponse` 观察钩子；`intercept(handler, filter?)` 请求控制（`continue 改写` / `fulfill mock` / `fail 拦阻`）；`interceptResponse(handler, filter?)` 改写真实响应。观察为流式安全、按 `maxResponseBodyBytes` 截断、二进制跳过、带 `source` 标签。主作用域插件还能看到 `webRequest` 看不到的 Node `http`/`https`；开启 `cdpNetwork` 后经 CDP 看到所有渲染层请求。`intercept`/`interceptResponse` 在开启 `cdpIntercept` 后由主进程经 CDP Fetch 执行——**仅被 `interceptResponse` 命中的 URL 会被缓冲改写**，其余保持流式。 |
 | `api.fs` | 限定在插件数据目录内的沙盒文件 I/O：`read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat`（utf8 或 base64）。 |
 | `api.cdp` | Chrome DevTools Protocol：`attach`/`send`/`on`/`evaluate`，外加 `onResponse`/`onRequestPaused` 便捷封装。渲染进程指向自身 webContents；主进程指向聚焦窗口。需要 `"cdp"` 权限。 |
 | `api.ui` | DOM 辅助：`injectCSS()`（返回移除函数）与 `toast()`（宿主隔离的通知）。 |

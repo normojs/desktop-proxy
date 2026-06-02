@@ -187,6 +187,9 @@ function getCdpNetworkObserver(): CdpNetworkObserver {
       log,
       interceptEnabled: () => readConfig().cdpIntercept === true,
       dispatchIntercept: (req) => net.dispatchIntercept(req),
+      hasResponseInterceptors: () => net.hasResponseInterceptors(),
+      responseInterceptMatches: (url) => net.responseInterceptMatches(url),
+      dispatchInterceptResponse: (res, url) => net.dispatchInterceptResponse(res, url),
     });
   }
   return _cdpNetObserver;

@@ -240,7 +240,7 @@ class NetworkHub {
 |---|---|---|---|
 | **P1 ✅(已完成)** | 腿2 Node http/https monkey-patch（**观察**：请求含 body + 响应截断，加 source；改写/block 留待 intercept 控制 API） | 最大缺口、自包含 | 无 |
 | **P2 ✅(已完成)** | 腿1 CDP **Network 被动域**渲染观察（旁路 + 取 body，流式安全），feed main api.network；`source:"renderer-cdp"`；config `cdpNetwork` 开关 | 高（绕开 contextIsolation） | 现有 CDP 层 |
-| **P3a ✅(已完成)** | `api.network.intercept(control)`（continue/fulfill/fail）经 CDP Fetch 请求阶段（**主作用域**决策，进程内）；config `cdpIntercept` 开关；决策超时兜底 | 完整改写/mock/block（主作用域） | P2 |
+| **P3a ✅(已完成)** | `api.network.intercept`（continue/fulfill/fail）经 CDP Fetch 请求阶段 + `interceptResponse`（改写真实响应，**仅命中 URL 缓冲**，其余保持流式）；**主作用域**决策；config `cdpIntercept`；决策超时兜底 | 完整改写/mock/block + 响应改写（主作用域） | P2 |
 | **P3b** | 渲染插件 intercept 的 IPC 往返（NetworkHub 路由到拥有该 wc 的渲染插件） | 渲染作用域 intercept | P3a |
 | **P4** | WebSocket 旁路（CDP 事件）`onWebSocket`；可选出站改写 | 中 | P2 |
 | **P5** | http2 / undici / EventSource；流量查看页 + HAR 导出 | 补全 | P1–P4 |

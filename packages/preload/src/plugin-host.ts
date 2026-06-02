@@ -238,6 +238,10 @@ function createPluginAPI(manifest: PluginManifest): { api: PluginAPI; dispose: (
           log.warn("api.network.intercept is not yet available to renderer plugins; use a main-scope plugin");
           return () => {};
         },
+        interceptResponse: () => {
+          log.warn("api.network.interceptResponse is not yet available to renderer plugins; use a main-scope plugin");
+          return () => {};
+        },
       }
     : {
         onRequest: () => {
@@ -247,6 +251,9 @@ function createPluginAPI(manifest: PluginManifest): { api: PluginAPI; dispose: (
           throw new Error(`Plugin ${id} lacks the "network" permission`);
         },
         intercept: () => {
+          throw new Error(`Plugin ${id} lacks the "network" permission`);
+        },
+        interceptResponse: () => {
           throw new Error(`Plugin ${id} lacks the "network" permission`);
         },
       };
