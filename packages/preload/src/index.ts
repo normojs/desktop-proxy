@@ -11,9 +11,11 @@
 
 import type { IpcRenderer } from "electron";
 
+import { isLevelEnabled } from "@desktop-proxy/plugin-sdk";
+
 import { installReactHook } from "./react-hook";
 import { installNetworkInterceptor } from "./network-interceptor";
-import { startPluginHost, teardownPluginHost, setSettingsCallbacks } from "./plugin-host";
+import { startPluginHost, teardownPluginHost, setSettingsCallbacks, setLogLevel } from "./plugin-host";
 import { installSettingsOverlay, type SettingsOverlayHandle } from "./settings-overlay";
 
 // ── Electron IPC ─────────────────────────────────────────────────────────────
@@ -29,7 +31,11 @@ function getIpcRenderer(): IpcRenderer {
   return _ipcRenderer!;
 }
 
+// Mirrored from the main process; framework diagnostics log at "info".
+let activeLogLevel = "info";
+
 function fileLog(stage: string, extra?: unknown): void {
+  if (!isLevelEnabled("info", activeLogLevel)) return;
   const msg = `[desktop-proxy preload] ${stage}${extra !== undefined ? " " + JSON.stringify(extra) : ""}`;
   try {
     getIpcRenderer().send("desktop-proxy:preload-log", "info", msg);
@@ -39,24 +45,26 @@ function fileLog(stage: string, extra?: unknown): void {
 }
 
 /**
- * Read the stealth flag synchronously. The hooks below run before any page code,
+ * Read framework config synchronously. The hooks below run before any page code,
  * so we cannot wait on an async IPC round-trip here.
  */
-function readStealth(): boolean {
+function readConfigSync(): { stealth: boolean; logLevel: string } {
   try {
     const cfg = getIpcRenderer().sendSync("desktop-proxy:config-sync") as
-      | { stealth?: boolean }
+      | { stealth?: boolean; logLevel?: string }
       | undefined;
-    return cfg?.stealth === true;
+    return { stealth: cfg?.stealth === true, logLevel: cfg?.logLevel ?? "info" };
   } catch {
-    return false;
+    return { stealth: false, logLevel: "info" };
   }
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
-const stealth = readStealth();
-fileLog("preload entry", { url: window.location.href, stealth });
+const { stealth, logLevel } = readConfigSync();
+activeLogLevel = logLevel;
+setLogLevel(logLevel);
+fileLog("preload entry", { url: window.location.href, stealth, logLevel });
 
 // Step 1: Install React hook BEFORE the app's JS bundle runs.
 // This must happen synchronously in the preload script.

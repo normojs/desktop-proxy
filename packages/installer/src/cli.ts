@@ -21,6 +21,7 @@ import { install } from "./commands/install.js";
 import { uninstall } from "./commands/uninstall.js";
 import { status } from "./commands/status.js";
 import { repair } from "./commands/repair.js";
+import { logs } from "./commands/logs.js";
 
 function printHelp(): void {
   console.log(`
@@ -32,11 +33,14 @@ Usage:
   desktop-proxy status                Show installation status
   desktop-proxy repair                Re-apply patches after app update
   desktop-proxy safe-mode [on|off]    Toggle safe mode (run app without plugins)
+  desktop-proxy logs [--follow]       View the runtime log (~/.desktop-proxy/log/main.log)
 
 Options:
   --app <path>      Path to the .app bundle (auto-detected if omitted)
   --no-fuse         Skip Electron fuse flipping
   --no-resign       Skip code re-signing (macOS)
+  --follow, -f      Follow the log output (logs command)
+  --lines <n>       Number of lines to print (logs command, default 200)
   --quiet           Suppress progress output
   --verbose         Show detailed output
 
@@ -72,7 +76,7 @@ async function main(): Promise<void> {
   }
 
   // Parse options
-  const opts: Record<string, string | boolean> = {};
+  const opts: Record<string, string | boolean | number> = {};
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--app" && args[i + 1]) {
       opts.app = args[++i];
@@ -80,6 +84,10 @@ async function main(): Promise<void> {
       opts.noFuse = true;
     } else if (args[i] === "--no-resign") {
       opts.noResign = true;
+    } else if (args[i] === "--follow" || args[i] === "-f") {
+      opts.follow = true;
+    } else if (args[i] === "--lines" && args[i + 1]) {
+      opts.lines = Number(args[++i]);
     } else if (args[i] === "--quiet") {
       opts.quiet = true;
     } else if (args[i] === "--verbose") {
@@ -104,6 +112,13 @@ async function main(): Promise<void> {
 
     case "status":
       status();
+      break;
+
+    case "logs":
+      logs({
+        follow: opts.follow as boolean | undefined,
+        lines: opts.lines as number | undefined,
+      });
       break;
 
     case "repair":

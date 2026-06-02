@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 
 import { createMainNetwork, type MainNetwork } from "./network";
 import { createMainCDP, type MainCDP } from "./cdp";
+import { createLogger, parseLevel, type Logger } from "./logger";
 import {
   pluginDataDir,
   fsRead,
@@ -49,18 +50,16 @@ fs.mkdirSync(PLUGINS_DIR, { recursive: true });
 
 const LOG_FILE = path.join(LOG_DIR, "main.log");
 
+// Level resolution order: env var → config.json → "info" default. The log file
+// is size-capped so it cannot grow without bound.
+const rootLogger: Logger = createLogger({
+  file: LOG_FILE,
+  level: parseLevel(process.env.DESKTOP_PROXY_LOG_LEVEL ?? readConfig().logLevel, "info"),
+  mirrorErrorsToStderr: true,
+});
+
 function log(level: string, ...args: unknown[]): void {
-  const line = `[${new Date().toISOString()}] [${level}] ${args
-    .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
-    .join(" ")}\n`;
-  try {
-    fs.appendFileSync(LOG_FILE, line);
-  } catch {
-    // best effort
-  }
-  if (level === "error") {
-    process.stderr.write(`[desktop-proxy] ${args.join(" ")}\n`);
-  }
+  rootLogger.log(level, ...args);
 }
 
 // ── Config ───────────────────────────────────────────────────────────────────
@@ -70,6 +69,8 @@ interface Config {
   safeMode?: boolean;
   /** When true, minimize the framework's detectable footprint in renderers. */
   stealth?: boolean;
+  /** Minimum log level: "debug" | "info" | "warn" | "error" | "silent". */
+  logLevel?: string;
   plugins?: Record<string, { enabled: boolean }>;
 }
 
@@ -246,6 +247,7 @@ function createMainProcessAPI(manifest: import("@desktop-proxy/plugin-sdk").Plug
       info: (...args) => log("info", `[${manifest.id}]`, ...args),
       warn: (...args) => log("warn", `[${manifest.id}]`, ...args),
       error: (...args) => log("error", `[${manifest.id}]`, ...args),
+      isEnabled: (level) => rootLogger.isEnabled(level),
     },
     storage: {
       get: <T>(key: string, defaultValue?: T): T => {
@@ -430,10 +432,11 @@ function setupIPCBridge(): void {
     log(level, `[preload]`, msg);
   });
 
-  // Synchronous config read — the preload needs the stealth flag *before* it
-  // installs any hooks (which happens synchronously at preload evaluation).
+  // Synchronous config read — the preload needs the stealth flag and log level
+  // *before* it installs any hooks (which happens synchronously at preload
+  // evaluation).
   electron.ipcMain.on("desktop-proxy:config-sync", (e) => {
-    e.returnValue = { stealth: isStealthEnabled() };
+    e.returnValue = { stealth: isStealthEnabled(), logLevel: rootLogger.getLevel() };
   });
 
   // Sandboxed filesystem — renderer plugins reach disk through these handlers.

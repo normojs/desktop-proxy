@@ -21,7 +21,9 @@ import type {
   PluginCDP,
   PluginApp,
   UnsubscribeFn,
+  LogLevel,
 } from "@desktop-proxy/plugin-sdk";
+import { isLevelEnabled } from "@desktop-proxy/plugin-sdk";
 
 import type { IpcRenderer, IpcRendererEvent } from "electron";
 
@@ -49,6 +51,14 @@ interface LoadedPlugin {
 
 const loaded = new Map<string, LoadedPlugin>();
 
+// Renderer-side log threshold, mirrored from the main process so we can avoid
+// sending suppressed log lines over IPC. Set by index.ts at boot.
+let currentLogLevel = "info";
+
+export function setLogLevel(level: string): void {
+  currentLogLevel = level || "info";
+}
+
 // Registers from settings-injector (set by caller)
 let registerSectionFn: ((section: { id: string; title: string; render: (root: HTMLElement) => void | (() => void) }) => { unregister(): void }) | null = null;
 let registerPageFn: ((tweakId: string, manifest: PluginManifest, page: { id: string; title: string; iconSvg?: string; description?: string; render: (root: HTMLElement) => void | (() => void) }) => { unregister(): void }) | null = null;
@@ -67,19 +77,21 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
   const ipc = getIpcRenderer();
   const id = manifest.id;
 
+  const emitLog = (level: LogLevel, args: unknown[]): void => {
+    if (!isLevelEnabled(level, currentLogLevel)) return;
+    try {
+      ipc.send("desktop-proxy:preload-log", level, `[${id}] ${args.map(String).join(" ")}`);
+    } catch {
+      // best effort
+    }
+  };
+
   const log: PluginLogger = {
-    debug: (...args: unknown[]) => {
-      try { ipc.send("desktop-proxy:preload-log", "debug", `[${id}] ${args.map(String).join(" ")}`); } catch {}
-    },
-    info: (...args: unknown[]) => {
-      try { ipc.send("desktop-proxy:preload-log", "info", `[${id}] ${args.map(String).join(" ")}`); } catch {}
-    },
-    warn: (...args: unknown[]) => {
-      try { ipc.send("desktop-proxy:preload-log", "warn", `[${id}] ${args.map(String).join(" ")}`); } catch {}
-    },
-    error: (...args: unknown[]) => {
-      try { ipc.send("desktop-proxy:preload-log", "error", `[${id}] ${args.map(String).join(" ")}`); } catch {}
-    },
+    debug: (...args: unknown[]) => emitLog("debug", args),
+    info: (...args: unknown[]) => emitLog("info", args),
+    warn: (...args: unknown[]) => emitLog("warn", args),
+    error: (...args: unknown[]) => emitLog("error", args),
+    isEnabled: (level) => isLevelEnabled(level, currentLogLevel),
   };
 
   const storage: PluginStorage = {

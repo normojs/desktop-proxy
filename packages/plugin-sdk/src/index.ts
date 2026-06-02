@@ -34,11 +34,30 @@ export interface PluginManifest {
 
 // ── Plugin API (available to plugins at runtime) ─────────────────────────────
 
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+/** Order used to compare levels; "silent" suppresses everything. */
+const LOG_ORDER: Record<LogLevel | "silent", number> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+  silent: 100,
+};
+
+/** True if `target` messages should be emitted given a `threshold` level. */
+export function isLevelEnabled(target: LogLevel, threshold: string): boolean {
+  const t = (LOG_ORDER as Record<string, number>)[threshold] ?? LOG_ORDER.info;
+  return LOG_ORDER[target] >= t;
+}
+
 export interface PluginLogger {
   debug(...args: unknown[]): void;
   info(...args: unknown[]): void;
   warn(...args: unknown[]): void;
   error(...args: unknown[]): void;
+  /** Guard expensive log construction: only build/log when the level is active. */
+  isEnabled(level: LogLevel): boolean;
 }
 
 export interface PluginStorage {

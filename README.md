@@ -2,6 +2,8 @@
 
 > Universal Electron app injection framework for request interception and UI customization.
 
+> 中文文档见 [README-zh.md](./README-zh.md)。
+
 `desktop-proxy` patches a locally installed Electron application so it loads a small
 runtime on startup. That runtime lives **outside** the app bundle, discovers local
 plugins, and injects them into both the main and renderer processes — letting you
@@ -29,6 +31,7 @@ It is a generalization of the [Codex++](./third-project/codex-plusplus) approach
 - [Writing Plugins](#writing-plugins)
 - [Plugin API](#plugin-api)
 - [Safety & Recovery](#safety--recovery)
+- [Logging](#logging)
 - [Stealth Mode](#stealth-mode)
 - [Platform Support](#platform-support)
 - [Development Notes](#development-notes)
@@ -147,6 +150,7 @@ node packages/installer/dist/cli.js <command> [options]
 | `status` | Show installation state, asar hash, and fuse state. |
 | `repair` | Re-apply patches after the target app updates. |
 | `safe-mode [on\|off]` | Run the app with all plugins disabled (toggles if no value given). |
+| `logs [--follow] [--lines N]` | Print (or live-tail) the runtime log. |
 
 **Options** (for `install` / `repair`):
 
@@ -283,7 +287,7 @@ re-runs renderer plugins when files change.
 |---|---|
 | `api.manifest` | The plugin's parsed manifest. |
 | `api.process` | `"main"` or `"renderer"`. |
-| `api.log` | `debug` / `info` / `warn` / `error`, forwarded to `main.log`. |
+| `api.log` | Leveled logging (`debug`/`info`/`warn`/`error`) forwarded to `main.log`, plus `isEnabled(level)` to guard expensive logs. |
 | `api.storage` | Persistent key/value store (`localStorage` in renderer, JSON file in main). |
 | `api.settings` | `registerSection` / `registerPage`, rendered in the framework's overlay panel. |
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement` (renderer). |
@@ -339,6 +343,36 @@ fails if DevTools is already open on that window.
 - **Repair** — re-applies the patch after the target app auto-updates (which
   usually wipes it).
 - **Capped logs** — log files are trimmed to a 10 MB rolling cap.
+
+---
+
+## Logging
+
+Framework and plugin logs are written to `~/.desktop-proxy/log/main.log`
+(size-capped at 10 MB); `loader.log` covers the earliest boot stage.
+Renderer/plugin logs are relayed to the main process over IPC.
+
+View them with the CLI:
+
+```bash
+node packages/installer/dist/cli.js logs            # last 200 lines
+node packages/installer/dist/cli.js logs --follow   # live tail
+node packages/installer/dist/cli.js logs --lines 50
+```
+
+Set the minimum level via `config.json` or an environment variable (env wins):
+
+```json
+{ "logLevel": "debug" }
+```
+
+```bash
+DESKTOP_PROXY_LOG_LEVEL=debug   # debug | info | warn | error | silent
+```
+
+Levels are ordered `debug < info < warn < error < silent` (default `info`).
+Plugins can guard expensive work with `api.log.isEnabled("debug")`, and the level
+is shared with renderers so suppressed messages are never sent over IPC.
 
 ---
 
