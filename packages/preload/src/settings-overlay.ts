@@ -366,7 +366,9 @@ export function installSettingsOverlay(opts: { stealth?: boolean } = {}): Settin
     runCleanup();
     sections.length = 0;
     pages.length = 0;
-    activeKey = null;
+    // Keep activeKey: if the same page is re-registered (e.g. on hot reload),
+    // the panel stays on it instead of jumping back to the first entry.
+    // renderContent() falls back to the first entry only if it no longer exists.
     if (!backdrop.hidden) refresh();
   }
 

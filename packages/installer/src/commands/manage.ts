@@ -133,13 +133,20 @@ export function pluginSetEnabled(id: string, enabled: boolean, json = false): vo
 }
 
 async function latestRelease(repo: string): Promise<string | null> {
-  const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-    headers: { Accept: "application/vnd.github+json", "User-Agent": "desktop-proxy" },
-  });
-  if (res.status === 404) return null; // no published releases
-  if (!res.ok) throw new Error(`GitHub API ${res.status}`);
-  const data = (await res.json()) as { tag_name?: string; name?: string };
-  return data.tag_name ?? data.name ?? null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "desktop-proxy" },
+      signal: controller.signal,
+    });
+    if (res.status === 404) return null; // no published releases
+    if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+    const data = (await res.json()) as { tag_name?: string; name?: string };
+    return data.tag_name ?? data.name ?? null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function pluginCheckUpdates(json = false): Promise<void> {
