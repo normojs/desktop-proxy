@@ -15,7 +15,7 @@ import { isLevelEnabled } from "@desktop-proxy/plugin-sdk";
 
 import { ch, setChannelPrefix } from "./channels";
 import { installReactHook } from "./react-hook";
-import { installNetworkInterceptor } from "./network-interceptor";
+import { installNetworkInterceptor, setMaxResponseBodyBytes } from "./network-interceptor";
 import { startPluginHost, teardownPluginHost, setSettingsCallbacks, setLogLevel, setEnforcePermissions } from "./plugin-host";
 import { installSettingsOverlay, type SettingsOverlayHandle } from "./settings-overlay";
 import { registerManagementPage } from "./management-page";
@@ -55,16 +55,24 @@ function readConfigSync(): {
   logLevel: string;
   channelPrefix: string;
   enforcePermissions: boolean;
+  maxResponseBodyBytes?: number;
 } {
   try {
     const cfg = getIpcRenderer().sendSync("desktop-proxy:config-sync") as
-      | { stealth?: boolean; logLevel?: string; channelPrefix?: string; enforcePermissions?: boolean }
+      | {
+          stealth?: boolean;
+          logLevel?: string;
+          channelPrefix?: string;
+          enforcePermissions?: boolean;
+          maxResponseBodyBytes?: number;
+        }
       | undefined;
     return {
       stealth: cfg?.stealth === true,
       logLevel: cfg?.logLevel ?? "info",
       channelPrefix: cfg?.channelPrefix ?? "desktop-proxy",
       enforcePermissions: cfg?.enforcePermissions === true,
+      maxResponseBodyBytes: cfg?.maxResponseBodyBytes,
     };
   } catch {
     return { stealth: false, logLevel: "info", channelPrefix: "desktop-proxy", enforcePermissions: false };
@@ -73,11 +81,12 @@ function readConfigSync(): {
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
-const { stealth, logLevel, channelPrefix, enforcePermissions } = readConfigSync();
+const { stealth, logLevel, channelPrefix, enforcePermissions, maxResponseBodyBytes } = readConfigSync();
 setChannelPrefix(channelPrefix);
 activeLogLevel = logLevel;
 setLogLevel(logLevel);
 setEnforcePermissions(enforcePermissions);
+if (typeof maxResponseBodyBytes === "number") setMaxResponseBodyBytes(maxResponseBodyBytes);
 fileLog("preload entry", { url: window.location.href, stealth, logLevel, channelPrefix });
 
 // Step 1: Install React hook BEFORE the app's JS bundle runs.

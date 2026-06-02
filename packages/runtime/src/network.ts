@@ -44,6 +44,10 @@ export interface MainNetwork {
 
 const URL_FILTER = { urls: ["*://*/*"] };
 
+// A request handler that never resolves would otherwise stall the request (the
+// webRequest callback must be called). Pass the request through after this.
+const HANDLER_TIMEOUT_MS = 3000;
+
 export function createMainNetwork(
   getSession: () => Session,
   whenReady: () => Promise<void>,
@@ -85,11 +89,25 @@ export function createMainNetwork(
           _type: "fetch",
         };
 
+        // The webRequest callback must run exactly once. Guard against a handler
+        // that hangs by passing the request through after a timeout.
+        let settled = false;
+        const finish = (headers: Record<string, string>): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          callback({ requestHeaders: headers });
+        };
+        const timer = setTimeout(() => {
+          log("warn", `main network handlers timed out for ${details.url}; passing through`);
+          finish(details.requestHeaders as Record<string, string>);
+        }, HANDLER_TIMEOUT_MS);
+
         void runRequestHandlers(request)
-          .then((modified) => callback({ requestHeaders: modified.headers }))
+          .then((modified) => finish(modified.headers))
           .catch((e) => {
             log("error", "main network onRequest handlers failed:", String(e));
-            callback({ requestHeaders: details.requestHeaders });
+            finish(details.requestHeaders as Record<string, string>);
           });
       },
     );

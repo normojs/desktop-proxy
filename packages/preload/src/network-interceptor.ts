@@ -61,6 +61,60 @@ function runResponseHandlers(response: NetworkResponse): void {
   }
 }
 
+// ── Response body capture (capped + content-type filtered) ───────────────────
+
+// Default 1 MiB cap so large downloads / long SSE streams don't buffer in full.
+// 0 means unlimited. Set from config at boot.
+let maxResponseBodyBytes = 1024 * 1024;
+
+export function setMaxResponseBodyBytes(bytes: number): void {
+  if (Number.isFinite(bytes) && bytes >= 0) maxResponseBodyBytes = bytes;
+}
+
+const TEXT_CONTENT_TYPE = /(json|text|xml|javascript|event-stream|x-www-form-urlencoded)/i;
+
+function isTextResponse(headers: Record<string, string>): boolean {
+  const contentType = headers["content-type"] ?? headers["Content-Type"] ?? "";
+  return contentType === "" || TEXT_CONTENT_TYPE.test(contentType);
+}
+
+/** Read a response body as text, stopping at `cap` bytes (0 = unlimited). */
+async function readCappedText(res: Response, cap: number): Promise<{ body: string; truncated: boolean }> {
+  const reader = res.body?.getReader();
+  if (!reader) {
+    try {
+      const text = await res.text();
+      if (cap > 0 && text.length > cap) return { body: text.slice(0, cap), truncated: true };
+      return { body: text, truncated: false };
+    } catch {
+      return { body: "", truncated: false };
+    }
+  }
+
+  const decoder = new TextDecoder();
+  let out = "";
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (cap > 0 && total > cap) {
+        const keep = Math.max(0, value.byteLength - (total - cap));
+        out += decoder.decode(value.subarray(0, keep));
+        await reader.cancel();
+        return { body: out, truncated: true };
+      }
+      out += decoder.decode(value, { stream: true });
+    }
+    out += decoder.decode();
+  } catch {
+    // stream error — return what we have
+  }
+  return { body: out, truncated: false };
+}
+
 // ── Hook fetch() ─────────────────────────────────────────────────────────────
 
 function hookFetch(): void {
@@ -109,23 +163,26 @@ function hookFetch(): void {
       response.headers.forEach((value, key) => {
         responseHeaders[key] = value;
       });
-      const clone = response.clone();
-      void clone
-        .text()
-        .then((responseBody) =>
-          runResponseHandlers({
-            id: `resp-${netReq.id}`,
-            requestId: netReq.id,
-            status: response.status,
-            statusText: response.statusText,
-            headers: responseHeaders,
-            body: responseBody,
-            timestamp: Date.now(),
-          }),
-        )
-        .catch(() => {
-          // response body unavailable
-        });
+      const base = {
+        id: `resp-${netReq.id}`,
+        requestId: netReq.id,
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+        timestamp: Date.now(),
+      };
+
+      if (isTextResponse(responseHeaders)) {
+        const clone = response.clone();
+        void readCappedText(clone, maxResponseBodyBytes)
+          .then(({ body, truncated }) => runResponseHandlers({ ...base, body, truncated }))
+          .catch(() => {
+            // response body unavailable
+          });
+      } else {
+        // Binary response: notify with metadata only, don't buffer the body.
+        runResponseHandlers({ ...base, body: null });
+      }
     }
 
     return response;
@@ -225,13 +282,21 @@ function hookXHR(): void {
             }
           });
 
+          let xhrBody: string | null = xhr.responseText ?? null;
+          let xhrTruncated = false;
+          if (xhrBody && maxResponseBodyBytes > 0 && xhrBody.length > maxResponseBodyBytes) {
+            xhrBody = xhrBody.slice(0, maxResponseBodyBytes);
+            xhrTruncated = true;
+          }
+
           const netResp: NetworkResponse = {
             id: `resp-${info.requestId}`,
             requestId: info.requestId,
             status: xhr.status,
             statusText: xhr.statusText,
             headers: responseHeaders,
-            body: xhr.responseText ?? null,
+            truncated: xhrTruncated,
+            body: xhrBody,
             timestamp: Date.now(),
           };
 

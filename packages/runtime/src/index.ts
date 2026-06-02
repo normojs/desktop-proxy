@@ -80,6 +80,8 @@ interface Config {
   logLevel?: string;
   /** When true, plugins must declare fs/network permissions to use those APIs. */
   enforcePermissions?: boolean;
+  /** Max bytes of a response body captured for plugins (0 = unlimited). */
+  maxResponseBodyBytes?: number;
   plugins?: Record<string, { enabled: boolean }>;
 }
 
@@ -221,6 +223,25 @@ function createMainCDPCore(
 
 function registerPreload(session: Electron.Session, label: string): void {
   try {
+    // Prefer the modern API (Electron >= 35); fall back to the deprecated
+    // setPreloads on older versions. The target app's Electron version varies,
+    // so feature-detect rather than assume.
+    const s = session as unknown as {
+      registerPreloadScript?: (script: { type: string; filePath: string }) => string;
+      getPreloadScripts?: () => Array<{ filePath?: string }>;
+    };
+
+    if (typeof s.registerPreloadScript === "function") {
+      const existing = s.getPreloadScripts?.() ?? [];
+      if (existing.some((p) => p.filePath === PRELOAD_PATH)) {
+        log("info", `preload already registered on ${label}`);
+        return;
+      }
+      s.registerPreloadScript({ type: "frame", filePath: PRELOAD_PATH });
+      log("info", `preload registered (registerPreloadScript) on ${label}:`, PRELOAD_PATH);
+      return;
+    }
+
     const existing = session.getPreloads();
     if (!existing.includes(PRELOAD_PATH)) {
       session.setPreloads([...existing, PRELOAD_PATH]);
@@ -525,6 +546,7 @@ function setupIPCBridge(): void {
       logLevel: rootLogger.getLevel(),
       channelPrefix: CHANNEL_PREFIX,
       enforcePermissions: readConfig().enforcePermissions === true,
+      maxResponseBodyBytes: readConfig().maxResponseBodyBytes,
     };
   });
 

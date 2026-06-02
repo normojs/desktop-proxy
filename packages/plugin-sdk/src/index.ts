@@ -126,6 +126,8 @@ export interface NetworkResponse {
   headers: Record<string, string>;
   body: string | null;
   timestamp: number;
+  /** True if `body` was truncated at the configured cap. */
+  truncated?: boolean;
 }
 
 export type NetworkRequestHandler = (request: NetworkRequest) => NetworkRequest | void | Promise<NetworkRequest | void>;

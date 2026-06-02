@@ -189,9 +189,10 @@ export async function pluginCheckUpdates(json = false): Promise<void> {
 
 // ── config ───────────────────────────────────────────────────────────────────
 
-const BOOL_KEYS = new Set(["autoUpdate", "safeMode", "stealth"]);
+const BOOL_KEYS = new Set(["autoUpdate", "safeMode", "stealth", "enforcePermissions"]);
 const STRING_KEYS = new Set(["logLevel"]);
-const SETTABLE = [...BOOL_KEYS, ...STRING_KEYS];
+const NUMBER_KEYS = new Set(["maxResponseBodyBytes"]);
+const SETTABLE = [...BOOL_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
 
 export function configGet(key: string | undefined, json = false): void {
   const cfg = readConfig() as Record<string, unknown>;
@@ -217,6 +218,13 @@ export function configSet(key: string, value: string, json = false): void {
     cfg[key] = ["true", "1", "on", "yes"].includes(value.toLowerCase());
   } else if (STRING_KEYS.has(key)) {
     cfg[key] = value;
+  } else if (NUMBER_KEYS.has(key)) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) {
+      fail(`"${key}" must be a number`, json);
+      return;
+    }
+    cfg[key] = n;
   } else {
     fail(`unknown config key "${key}". Settable: ${SETTABLE.join(", ")}`, json);
     return;

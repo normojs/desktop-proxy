@@ -158,7 +158,7 @@ node packages/installer/dist/cli.js <command> [options]
 | `plugin enable\|disable <id>` | Enable/disable a plugin (applied live if the app is running). |
 | `plugin check-updates [--json]` | Check each plugin's `githubRepo` for a newer release. |
 | `config get [key] [--json]` | Print the config (or a single key). |
-| `config set <key> <value>` | Set a config key (`logLevel`, `stealth`, `safeMode`, `autoUpdate`). |
+| `config set <key> <value>` | Set a config key (`logLevel`, `stealth`, `safeMode`, `autoUpdate`, `enforcePermissions`, `maxResponseBodyBytes`). |
 | `watch install\|uninstall\|status` | Auto re-apply the patch when the app updates (macOS). |
 | `create-plugin <dir>` | Scaffold a new plugin (`--id` / `--name` / `--scope`). |
 | `validate-plugin <dir> [--json]` | Validate a plugin's manifest and entry file. |
@@ -322,7 +322,7 @@ re-runs renderer plugins when files change.
 | `api.settings` | `registerSection` / `registerPage`, rendered in the framework's overlay panel. |
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement` (renderer). |
 | `api.ipc` | Namespaced `on` / `send` / `invoke` between main and renderer. |
-| `api.network` | `onRequest` / `onResponse` interception hooks. |
+| `api.network` | `onRequest` / `onResponse` interception hooks. Response bodies are read non-blocking (streaming-safe), capped at `maxResponseBodyBytes` (default 1 MiB), and skipped for binary content types. |
 | `api.fs` | Sandboxed file I/O confined to the plugin's data dir: `read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat` (utf8 or base64). |
 | `api.cdp` | Chrome DevTools Protocol: `attach`/`send`/`on`/`evaluate` plus `onResponse`/`onRequestPaused` helpers. Renderer targets its own webContents; main targets the focused window. Requires the `"cdp"` permission. |
 | `api.ui` | DOM helpers: `injectCSS()` (returns a remover) and `toast()` (host-isolated notification). |
@@ -507,6 +507,19 @@ For an alternative, file-free injection strategy (hooking the V8 compiler via
   `electron` dependency is for **types only**.
 - `plugin-sdk` is DOM-typed (it references `HTMLElement` for settings rendering)
   and intentionally has no Node types.
+
+### Reliability
+
+- Subscriptions a plugin acquires via `api.*` (ipc/network/cdp/settings/ui) are
+  tracked per-plugin and revoked automatically on hot reload, so they don't
+  accumulate even if the plugin's `stop()` doesn't unsubscribe.
+- The renderer fetch hook reads response bodies off the critical path so
+  streaming/SSE responses are not buffered; bodies are capped and binary types
+  are skipped.
+- Main-process `webRequest` handlers run under a 3s timeout, after which the
+  request passes through unmodified (a hung handler can't stall traffic).
+- Preload registration uses `session.registerPreloadScript` on Electron ≥ 35 and
+  falls back to `setPreloads` on older versions.
 
 ### Testing
 

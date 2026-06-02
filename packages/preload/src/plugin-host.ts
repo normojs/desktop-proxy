@@ -19,6 +19,7 @@ import type {
   PluginNetwork,
   PluginFS,
   PluginCDPCore,
+  PluginUI,
   PluginApp,
   UnsubscribeFn,
   LogLevel,
@@ -49,6 +50,7 @@ function getIpcRenderer(): IpcRenderer {
 interface LoadedPlugin {
   manifest: PluginManifest;
   stop?: () => void | Promise<void>;
+  dispose: () => void;
 }
 
 const loaded = new Map<string, LoadedPlugin>();
@@ -104,9 +106,17 @@ export function setSettingsCallbacks(
 
 // ── Plugin API Factory ───────────────────────────────────────────────────────
 
-function createPluginAPI(manifest: PluginManifest): PluginAPI {
+function createPluginAPI(manifest: PluginManifest): { api: PluginAPI; dispose: () => void } {
   const ipc = getIpcRenderer();
   const id = manifest.id;
+
+  // Per-plugin disposal scope: every subscription handed to the plugin is
+  // remembered here and revoked on teardown, even if the plugin's stop() omits it.
+  const disposers: Array<() => void> = [];
+  const remember = (off: UnsubscribeFn): UnsubscribeFn => {
+    disposers.push(off);
+    return off;
+  };
 
   const emitLog = (level: LogLevel, args: unknown[]): void => {
     if (!isLevelEnabled(level, currentLogLevel)) return;
@@ -155,14 +165,18 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
 
   const settings: PluginSettings = {
     registerSection: (section) => {
-      if (registerSectionFn) return registerSectionFn(section);
-      log.warn("registerSection called but settings-injector is not active");
-      return { unregister: () => {} };
+      const handle = registerSectionFn
+        ? registerSectionFn(section)
+        : (log.warn("registerSection called but settings-injector is not active"), { unregister: () => {} });
+      disposers.push(() => handle.unregister());
+      return handle;
     },
     registerPage: (page) => {
-      if (registerPageFn) return registerPageFn(id, manifest, page);
-      log.warn("registerPage called but settings-injector is not active");
-      return { unregister: () => {} };
+      const handle = registerPageFn
+        ? registerPageFn(id, manifest, page)
+        : (log.warn("registerPage called but settings-injector is not active"), { unregister: () => {} });
+      disposers.push(() => handle.unregister());
+      return handle;
     },
   };
 
@@ -203,7 +217,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
       const fullChannel = ch(`${id}:${channel}`);
       const wrapped = (_e: IpcRendererEvent, ...args: unknown[]) => handler(...args);
       ipc.on(fullChannel, wrapped);
-      return () => { ipc.removeListener(fullChannel, wrapped); };
+      return remember(() => { ipc.removeListener(fullChannel, wrapped); });
     },
     send: (channel: string, ...args: unknown[]) => {
       ipc.send(ch(`${id}:${channel}`), ...args);
@@ -215,8 +229,8 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
 
   const network: PluginNetwork = allowPermission(manifest, "network")
     ? {
-        onRequest: (handler) => onRequest(handler),
-        onResponse: (handler) => onResponse(handler),
+        onRequest: (handler) => remember(onRequest(handler)),
+        onResponse: (handler) => remember(onResponse(handler)),
       }
     : {
         onRequest: () => {
@@ -248,14 +262,24 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
         stat: denyFs,
       };
 
-  const cdp = createCDP(createRendererCDPCore(id, manifest, ipc));
+  const cdpCore = createRendererCDPCore(id, manifest, ipc);
+  const cdp = createCDP({
+    ...cdpCore,
+    on: (event, handler) => remember(cdpCore.on(event, handler)),
+  });
+
+  const rawUi = createUiApi();
+  const ui: PluginUI = {
+    ...rawUi,
+    injectCSS: (css) => remember(rawUi.injectCSS(css)),
+  };
 
   const app: PluginApp = {
     getInfo: async () => ipc.invoke(ch("app-info")),
     getWindows: async () => ipc.invoke(ch("windows")),
   };
 
-  return {
+  const api: PluginAPI = {
     manifest,
     process: "renderer",
     log,
@@ -266,9 +290,21 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
     network,
     fs: fsApi,
     cdp,
-    ui: createUiApi(),
+    ui,
     app,
   };
+
+  const dispose = (): void => {
+    for (const off of disposers.splice(0)) {
+      try {
+        off();
+      } catch {
+        // best effort
+      }
+    }
+  };
+
+  return { api, dispose };
 }
 
 // ── CDP core (renderer) ──────────────────────────────────────────────────────
@@ -375,11 +411,12 @@ export async function startPluginHost(): Promise<void> {
         throw new Error(`Plugin ${plugin.manifest.id} has no start() function`);
       }
 
-      const api = createPluginAPI(plugin.manifest);
+      const { api, dispose } = createPluginAPI(plugin.manifest);
       await tweak.start(api);
       loaded.set(plugin.manifest.id, {
         manifest: plugin.manifest,
         stop: tweak.stop?.bind(tweak),
+        dispose,
       });
 
       ipc.send(ch("preload-log"), "info", `Loaded plugin: ${plugin.manifest.id}`);
@@ -397,9 +434,11 @@ export async function teardownPluginHost(): Promise<void> {
     } catch {
       // best effort
     }
+    // Revoke every subscription the plugin acquired, regardless of its stop().
+    plugin.dispose();
   }
   loaded.clear();
-  // Drop framework-owned subscriptions so they don't accumulate across reloads.
+  // Belt-and-suspenders: also clear the shared framework-owned registries.
   clearNetworkHandlers();
   clearCdpHandlers();
 }

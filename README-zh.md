@@ -152,7 +152,7 @@ node packages/installer/dist/cli.js <command> [options]
 | `plugin enable\|disable <id>` | 启用/禁用插件（app 运行时即时生效）。 |
 | `plugin check-updates [--json]` | 检查各插件 `githubRepo` 是否有新版本。 |
 | `config get [key] [--json]` | 打印配置（或单个键）。 |
-| `config set <key> <value>` | 设置配置键（`logLevel`/`stealth`/`safeMode`/`autoUpdate`）。 |
+| `config set <key> <value>` | 设置配置键（`logLevel`/`stealth`/`safeMode`/`autoUpdate`/`enforcePermissions`/`maxResponseBodyBytes`）。 |
 | `watch install\|uninstall\|status` | app 更新后自动重打补丁（macOS）。 |
 | `create-plugin <dir>` | 脚手架生成新插件（`--id`/`--name`/`--scope`）。 |
 | `validate-plugin <dir> [--json]` | 校验插件的 manifest 与入口文件。 |
@@ -312,7 +312,7 @@ module.exports = {
 | `api.settings` | `registerSection` / `registerPage`，渲染到框架的浮层面板。 |
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement`（渲染进程）。 |
 | `api.ipc` | 主进程与渲染进程间带命名空间的 `on` / `send` / `invoke`。 |
-| `api.network` | `onRequest` / `onResponse` 拦截钩子。 |
+| `api.network` | `onRequest` / `onResponse` 拦截钩子。响应体非阻塞读取（流式安全）、按 `maxResponseBodyBytes`（默认 1 MiB）截断、二进制类型跳过。 |
 | `api.fs` | 限定在插件数据目录内的沙盒文件 I/O：`read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat`（utf8 或 base64）。 |
 | `api.cdp` | Chrome DevTools Protocol：`attach`/`send`/`on`/`evaluate`，外加 `onResponse`/`onRequestPaused` 便捷封装。渲染进程指向自身 webContents；主进程指向聚焦窗口。需要 `"cdp"` 权限。 |
 | `api.ui` | DOM 辅助：`injectCSS()`（返回移除函数）与 `toast()`（宿主隔离的通知）。 |
@@ -479,6 +479,14 @@ DESKTOP_PROXY_LOG_LEVEL=debug   # debug | info | warn | error | silent
   `@electron/asar` v4。
 - `runtime` 与 `preload` 在运行时从目标应用解析 Electron；`electron` 依赖**仅用于类型**。
 - `plugin-sdk` 带 DOM 类型（设置渲染用到 `HTMLElement`），且刻意不含 Node 类型。
+
+### 健壮性
+
+- 插件通过 `api.*`（ipc/network/cdp/settings/ui）获得的订阅按插件登记，热重载时**自动注销**，
+  即便插件 `stop()` 没退订也不会累积。
+- 渲染层 fetch hook 在关键路径外读响应体，**流式/SSE 不被缓冲**；响应体有上限、二进制类型跳过。
+- 主进程 `webRequest` handler 有 3s 超时，超时后请求**原样放行**（避免某 handler 卡死全部流量）。
+- preload 注册在 Electron ≥ 35 用 `session.registerPreloadScript`，旧版本回退 `setPreloads`。
 
 ### 测试
 
