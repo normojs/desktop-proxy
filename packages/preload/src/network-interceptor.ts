@@ -17,8 +17,6 @@ let requestIdCounter = 0;
 const requestHandlers: Set<NetworkRequestHandler> = new Set();
 const responseHandlers: Set<NetworkResponseHandler> = new Set();
 
-const REQUEST_MAP = new Map<string, Request>();
-
 function nextRequestId(): string {
   return `req-${++requestIdCounter}-${Date.now()}`;
 }
@@ -86,15 +84,12 @@ function hookFetch(): void {
     }
 
     const netReq = requestToSerializable(request, body, "fetch");
-    REQUEST_MAP.set(netReq.id, request);
 
-    // Run request handlers
+    // Run request handlers (may modify url/method).
     const modifiedReq = await runRequestHandlers(netReq);
 
-    // If the URL was modified, recreate the request
     let finalRequest: RequestInfo | URL = input;
     let finalInit: RequestInit | undefined = init;
-
     if (modifiedReq.url !== netReq.url || modifiedReq.method !== netReq.method) {
       finalRequest = new Request(modifiedReq.url, {
         method: modifiedReq.method,
@@ -104,34 +99,34 @@ function hookFetch(): void {
       finalInit = undefined;
     }
 
-    // Execute the original fetch
     const response = await originalFetch(finalRequest, finalInit);
 
-    // Read response body as text for interception
-    const clonedResponse = response.clone();
-    let responseBody: string | null = null;
-    try {
-      responseBody = await clonedResponse.text();
-    } catch {
-      // can't read response body
+    // Notify response handlers WITHOUT blocking the caller: read a clone of the
+    // body in the background so streaming responses (e.g. SSE used by AI APIs)
+    // still reach the app immediately instead of being buffered first.
+    if (responseHandlers.size > 0) {
+      const responseHeaders: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+      });
+      const clone = response.clone();
+      void clone
+        .text()
+        .then((responseBody) =>
+          runResponseHandlers({
+            id: `resp-${netReq.id}`,
+            requestId: netReq.id,
+            status: response.status,
+            statusText: response.statusText,
+            headers: responseHeaders,
+            body: responseBody,
+            timestamp: Date.now(),
+          }),
+        )
+        .catch(() => {
+          // response body unavailable
+        });
     }
-
-    const responseHeaders: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      responseHeaders[key] = value;
-    });
-
-    const netResp: NetworkResponse = {
-      id: `resp-${netReq.id}`,
-      requestId: netReq.id,
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
-      body: responseBody,
-      timestamp: Date.now(),
-    };
-
-    runResponseHandlers(netResp);
 
     return response;
   };
@@ -276,4 +271,10 @@ export function onRequest(handler: NetworkRequestHandler): UnsubscribeFn {
 export function onResponse(handler: NetworkResponseHandler): UnsubscribeFn {
   responseHandlers.add(handler);
   return () => responseHandlers.delete(handler);
+}
+
+/** Remove all handlers — called on hot reload so they don't accumulate. */
+export function clearNetworkHandlers(): void {
+  requestHandlers.clear();
+  responseHandlers.clear();
 }

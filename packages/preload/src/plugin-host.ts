@@ -29,7 +29,7 @@ import type { IpcRenderer, IpcRendererEvent } from "electron";
 
 import { ch } from "./channels";
 import { fiberForNode } from "./react-hook";
-import { onRequest, onResponse } from "./network-interceptor";
+import { onRequest, onResponse, clearNetworkHandlers } from "./network-interceptor";
 import { createUiApi } from "./ui";
 
 // ── IPC Renderer utilities (preload has access to ipcRenderer via require("electron")) ──
@@ -275,26 +275,31 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
 // Targets the plugin's own webContents over IPC. The shared createCDP() layers
 // evaluate()/onResponse()/onRequestPaused() on top of this core.
 
+// Shared CDP event routing: a SINGLE ipc listener (installed once for the
+// renderer's lifetime) dispatches to handlers keyed by CDP event method. Using
+// module scope avoids leaking a new ipc listener per plugin on every hot reload.
+const cdpHandlers = new Map<string, Set<(params: unknown) => void>>();
+let cdpListening = false;
+
+function ensureCdpListening(): void {
+  if (cdpListening) return;
+  cdpListening = true;
+  getIpcRenderer().on(ch("cdp:event"), (_e: IpcRendererEvent, payload: { method: string; params: unknown }) => {
+    const set = cdpHandlers.get(payload.method);
+    if (set) for (const h of set) { try { h(payload.params); } catch { /* ignore */ } }
+  });
+}
+
+function clearCdpHandlers(): void {
+  cdpHandlers.clear();
+}
+
 function createRendererCDPCore(
   id: string,
   manifest: PluginManifest,
   ipc: IpcRenderer,
 ): PluginCDPCore {
   const granted = Array.isArray(manifest.permissions) && manifest.permissions.includes("cdp");
-
-  // Per-plugin event routing: one shared ipc listener dispatches to handlers
-  // registered for each CDP event method.
-  const handlers = new Map<string, Set<(params: unknown) => void>>();
-  let listening = false;
-
-  function ensureListening(): void {
-    if (listening) return;
-    ipc.on(ch("cdp:event"), (_e: IpcRendererEvent, payload: { method: string; params: unknown }) => {
-      const set = handlers.get(payload.method);
-      if (set) for (const h of set) { try { h(payload.params); } catch { /* ignore */ } }
-    });
-    listening = true;
-  }
 
   function requireGrant(): void {
     if (!granted) {
@@ -305,7 +310,7 @@ function createRendererCDPCore(
   return {
     attach: async () => {
       requireGrant();
-      ensureListening();
+      ensureCdpListening();
       return ipc.invoke(ch("cdp:attach"));
     },
     detach: async () => {
@@ -322,11 +327,11 @@ function createRendererCDPCore(
     },
     on: (event: string, handler: (params: unknown) => void): UnsubscribeFn => {
       requireGrant();
-      ensureListening();
-      let set = handlers.get(event);
-      if (!set) handlers.set(event, (set = new Set()));
+      ensureCdpListening();
+      let set = cdpHandlers.get(event);
+      if (!set) cdpHandlers.set(event, (set = new Set()));
       set.add(handler);
-      return () => { set?.delete(handler); };
+      return () => { cdpHandlers.get(event)?.delete(handler); };
     },
   };
 }
@@ -386,12 +391,15 @@ export async function startPluginHost(): Promise<void> {
 
 /** Stop all loaded renderer plugins */
 export async function teardownPluginHost(): Promise<void> {
-  for (const [id, plugin] of loaded) {
+  for (const [, plugin] of loaded) {
     try {
       await plugin.stop?.();
-    } catch (e) {
+    } catch {
       // best effort
     }
   }
   loaded.clear();
+  // Drop framework-owned subscriptions so they don't accumulate across reloads.
+  clearNetworkHandlers();
+  clearCdpHandlers();
 }
