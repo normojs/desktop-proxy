@@ -107,6 +107,9 @@ export interface PluginIPC {
 
 // ── Network Interception (primary use case) ──────────────────────────────────
 
+/** Where an intercepted request/response was observed. */
+export type NetworkSource = "renderer-cdp" | "node-http" | "web-request" | "renderer-hook";
+
 export interface NetworkRequest {
   id: string;
   method: string;
@@ -115,7 +118,11 @@ export interface NetworkRequest {
   body: string | null;
   timestamp: number;
   /** Type discriminator */
-  _type: "fetch" | "xhr";
+  _type: "fetch" | "xhr" | "node" | "websocket";
+  /** Interception surface this came from (optional for back-compat). */
+  source?: NetworkSource;
+  /** Encoding of `body` ("utf8" by default; "base64" for binary). */
+  bodyEncoding?: "utf8" | "base64";
 }
 
 export interface NetworkResponse {
@@ -128,6 +135,10 @@ export interface NetworkResponse {
   timestamp: number;
   /** True if `body` was truncated at the configured cap. */
   truncated?: boolean;
+  /** Interception surface this came from (optional for back-compat). */
+  source?: NetworkSource;
+  /** Encoding of `body` ("utf8" by default; "base64" for binary). */
+  bodyEncoding?: "utf8" | "base64";
 }
 
 export type NetworkRequestHandler = (request: NetworkRequest) => NetworkRequest | void | Promise<NetworkRequest | void>;

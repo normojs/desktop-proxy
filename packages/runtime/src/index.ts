@@ -153,6 +153,7 @@ function getMainNetwork(): MainNetwork {
       () => electron.session.defaultSession,
       () => electron.app.whenReady().then(() => undefined),
       log,
+      () => readConfig().maxResponseBodyBytes ?? 1024 * 1024,
     );
   }
   return _mainNetwork;

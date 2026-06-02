@@ -35,6 +35,8 @@ import type {
   UnsubscribeFn,
 } from "@desktop-proxy/plugin-sdk";
 
+import { installNodeIntercept } from "./net/node-intercept";
+
 type Logger = (level: string, ...args: unknown[]) => void;
 
 export interface MainNetwork {
@@ -52,6 +54,7 @@ export function createMainNetwork(
   getSession: () => Session,
   whenReady: () => Promise<void>,
   log: Logger,
+  maxBodyBytes: () => number = () => 1024 * 1024,
 ): MainNetwork {
   const requestHandlers = new Set<NetworkRequestHandler>();
   const responseHandlers = new Set<NetworkResponseHandler>();
@@ -74,6 +77,16 @@ export function createMainNetwork(
     return modified;
   }
 
+  function dispatchResponse(response: NetworkResponse): void {
+    for (const handler of responseHandlers) {
+      try {
+        handler(response);
+      } catch {
+        // swallow handler errors
+      }
+    }
+  }
+
   function attachRequest(): void {
     if (requestAttached) return;
     getSession().webRequest.onBeforeSendHeaders(
@@ -81,6 +94,7 @@ export function createMainNetwork(
       (details: OnBeforeSendHeadersListenerDetails, callback: (response: BeforeSendResponse) => void) => {
         const request: NetworkRequest = {
           id: String(details.id),
+          source: "web-request",
           method: details.method,
           url: details.url,
           headers: { ...((details.requestHeaders as Record<string, string>) ?? {}) },
@@ -126,22 +140,16 @@ export function createMainNetwork(
   function attachResponse(): void {
     if (responseAttached) return;
     getSession().webRequest.onCompleted(URL_FILTER, (details: OnCompletedListenerDetails) => {
-      const response: NetworkResponse = {
+      dispatchResponse({
         id: `resp-${details.id}`,
         requestId: String(details.id),
+        source: "web-request",
         status: details.statusCode,
         statusText: details.statusLine?.split(" ").slice(1).join(" ") || "",
         headers: (details.responseHeaders as unknown as Record<string, string>) ?? {},
         body: null,
         timestamp: Date.now(),
-      };
-      for (const handler of responseHandlers) {
-        try {
-          handler(response);
-        } catch {
-          // swallow handler errors
-        }
-      }
+      });
     });
     responseAttached = true;
     log("info", "main network: onCompleted hook attached");
@@ -174,6 +182,18 @@ export function createMainNetwork(
       syncResponse();
     })
     .catch((e) => log("error", "main network: whenReady failed:", String(e)));
+
+  // Node http/https traffic isn't visible to webRequest; patch the Node modules
+  // and feed observations into the same handler sets (tagged source "node-http").
+  installNodeIntercept({
+    hasHandlers: () => requestHandlers.size > 0 || responseHandlers.size > 0,
+    observeRequest: (req) => {
+      void runRequestHandlers(req); // v1: observe only (modifications not applied)
+    },
+    observeResponse: dispatchResponse,
+    maxBodyBytes,
+    log,
+  });
 
   return {
     onRequest(handler: NetworkRequestHandler): UnsubscribeFn {

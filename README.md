@@ -322,7 +322,7 @@ re-runs renderer plugins when files change.
 | `api.settings` | `registerSection` / `registerPage`, rendered in the framework's overlay panel. |
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement` (renderer). |
 | `api.ipc` | Namespaced `on` / `send` / `invoke` between main and renderer. |
-| `api.network` | `onRequest` / `onResponse` interception hooks. Response bodies are read non-blocking (streaming-safe), capped at `maxResponseBodyBytes` (default 1 MiB), and skipped for binary content types. |
+| `api.network` | `onRequest` / `onResponse` interception hooks. Response bodies are read non-blocking (streaming-safe), capped at `maxResponseBodyBytes` (default 1 MiB), and skipped for binary types. Events carry a `source` tag; main-scope plugins also observe Node `http`/`https` traffic (axios/got/node-fetch) that `webRequest` cannot see. |
 | `api.fs` | Sandboxed file I/O confined to the plugin's data dir: `read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat` (utf8 or base64). |
 | `api.cdp` | Chrome DevTools Protocol: `attach`/`send`/`on`/`evaluate` plus `onResponse`/`onRequestPaused` helpers. Renderer targets its own webContents; main targets the focused window. Requires the `"cdp"` permission. |
 | `api.ui` | DOM helpers: `injectCSS()` (returns a remover) and `toast()` (host-isolated notification). |

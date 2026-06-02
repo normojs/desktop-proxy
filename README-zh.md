@@ -312,7 +312,7 @@ module.exports = {
 | `api.settings` | `registerSection` / `registerPage`，渲染到框架的浮层面板。 |
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement`（渲染进程）。 |
 | `api.ipc` | 主进程与渲染进程间带命名空间的 `on` / `send` / `invoke`。 |
-| `api.network` | `onRequest` / `onResponse` 拦截钩子。响应体非阻塞读取（流式安全）、按 `maxResponseBodyBytes`（默认 1 MiB）截断、二进制类型跳过。 |
+| `api.network` | `onRequest` / `onResponse` 拦截钩子。响应体非阻塞读取（流式安全）、按 `maxResponseBodyBytes`（默认 1 MiB）截断、二进制类型跳过。事件带 `source` 标签；主作用域插件还能观察到 `webRequest` 看不到的 Node `http`/`https` 流量（axios/got/node-fetch）。 |
 | `api.fs` | 限定在插件数据目录内的沙盒文件 I/O：`read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat`（utf8 或 base64）。 |
 | `api.cdp` | Chrome DevTools Protocol：`attach`/`send`/`on`/`evaluate`，外加 `onResponse`/`onRequestPaused` 便捷封装。渲染进程指向自身 webContents；主进程指向聚焦窗口。需要 `"cdp"` 权限。 |
 | `api.ui` | DOM 辅助：`injectCSS()`（返回移除函数）与 `toast()`（宿主隔离的通知）。 |
