@@ -48,8 +48,8 @@ interface LoadedPlugin {
 const loaded = new Map<string, LoadedPlugin>();
 
 // Registers from settings-injector (set by caller)
-let registerSectionFn: ((section: { id: string; title: string; render: (root: HTMLElement) => void }) => { unregister(): void }) | null = null;
-let registerPageFn: ((tweakId: string, manifest: PluginManifest, page: { id: string; title: string; iconSvg?: string; description?: string; render: (root: HTMLElement) => void }) => { unregister(): void }) | null = null;
+let registerSectionFn: ((section: { id: string; title: string; render: (root: HTMLElement) => void | (() => void) }) => { unregister(): void }) | null = null;
+let registerPageFn: ((tweakId: string, manifest: PluginManifest, page: { id: string; title: string; iconSvg?: string; description?: string; render: (root: HTMLElement) => void | (() => void) }) => { unregister(): void }) | null = null;
 
 export function setSettingsCallbacks(
   registerSection: typeof registerSectionFn,

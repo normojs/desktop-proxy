@@ -13,7 +13,8 @@ import type { IpcRenderer } from "electron";
 
 import { installReactHook } from "./react-hook";
 import { installNetworkInterceptor } from "./network-interceptor";
-import { startPluginHost, teardownPluginHost } from "./plugin-host";
+import { startPluginHost, teardownPluginHost, setSettingsCallbacks } from "./plugin-host";
+import { installSettingsOverlay, type SettingsOverlayHandle } from "./settings-overlay";
 
 // ── Electron IPC ─────────────────────────────────────────────────────────────
 // In a sandboxed preload context, we can still require("electron") to get ipcRenderer.
@@ -58,9 +59,22 @@ try {
   fileLog("network interceptor install FAILED", String(e));
 }
 
-// Step 3: After DOMContentLoaded, start plugin host.
+// Step 3: After DOMContentLoaded, install the settings overlay and start the
+// plugin host. The overlay must be wired before plugins run so that
+// api.settings.* registrations made during start() land in the panel.
+let overlay: SettingsOverlayHandle | null = null;
+
 function boot(): void {
   fileLog("boot start", { readyState: document.readyState });
+  try {
+    if (!overlay) {
+      overlay = installSettingsOverlay();
+      setSettingsCallbacks(overlay.registerSection, overlay.registerPage);
+      fileLog("settings overlay installed");
+    }
+  } catch (e) {
+    fileLog("settings overlay install FAILED", String(e));
+  }
   startPluginHost()
     .then(() => fileLog("plugin host started"))
     .catch((e) => fileLog("plugin host start FAILED", String(e)));
@@ -81,6 +95,7 @@ getIpcRenderer().on("desktop-proxy:plugins-changed", () => {
     try {
       fileLog("hot-reloading plugins");
       await teardownPluginHost();
+      overlay?.clearAll();
       await startPluginHost();
       fileLog("hot-reload complete");
     } catch (e) {

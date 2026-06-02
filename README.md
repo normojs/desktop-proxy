@@ -65,6 +65,7 @@ renderer window created
   └─ preload.js runs before page JS
        ├─ installs the React DevTools global hook (fiber access)
        ├─ hooks window.fetch / XMLHttpRequest (network interception)
+       ├─ installs the settings overlay (isolated Shadow-DOM panel)
        └─ on DOMContentLoaded → plugin host loads renderer-scope plugins
 ```
 
@@ -281,7 +282,7 @@ re-runs renderer plugins when files change.
 | `api.process` | `"main"` or `"renderer"`. |
 | `api.log` | `debug` / `info` / `warn` / `error`, forwarded to `main.log`. |
 | `api.storage` | Persistent key/value store (`localStorage` in renderer, JSON file in main). |
-| `api.settings` | `registerSection` / `registerPage` for in-app settings UI. |
+| `api.settings` | `registerSection` / `registerPage`, rendered in the framework's overlay panel. |
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement` (renderer). |
 | `api.ipc` | Namespaced `on` / `send` / `invoke` between main and renderer. |
 | `api.network` | `onRequest` / `onResponse` interception hooks. |
@@ -293,6 +294,15 @@ re-runs renderer plugins when files change.
 detects calls to OpenAI, Anthropic, Google AI, DeepSeek, and Codex endpoints,
 captures (and redacts) API tokens and request/response bodies, and exposes a
 settings page to review them. It is deployed automatically on `install`.
+
+### Settings overlay
+
+Pages and sections registered via `api.settings.*` are rendered in a
+**framework-owned overlay panel**, not by hooking the host app's own settings UI.
+The panel lives in an isolated Shadow DOM so it is unaffected by (and does not
+affect) the host app's markup and CSS — making it work uniformly across any
+Electron app. Open it with the floating **DP** button (bottom-right) or the
+**Cmd/Ctrl+Shift+\\** hotkey; press **Esc** to close.
 
 ---
 
