@@ -69,6 +69,49 @@ export function adHocSign(appRoot: string): void {
   signAppBundle(appRoot, { useLocalIdentity: false });
 }
 
+/**
+ * Deep-sign a bundle with hardened runtime + an entitlements plist. Used by the
+ * DYLD/V8-hook injection backend, which needs the target to allow loading our
+ * dylib (disable-library-validation), honor DYLD env vars, and let Frida patch
+ * code pages. See docs/macos-injection-plan.md.
+ *
+ * Note: `--deep` does NOT propagate these entitlements to nested Helper apps;
+ * each Helper that loads the dylib must be signed with the same entitlements
+ * separately (the backend executor handles that). This signs a single bundle.
+ */
+export function signAppBundleWithEntitlements(
+  bundlePath: string,
+  entitlementsPath: string,
+  opts: CodeSigningOptions = {},
+): string | null {
+  if (platform() !== "darwin") return null;
+  if (!existsSync(entitlementsPath)) {
+    throw new Error(`entitlements file not found: ${entitlementsPath}`);
+  }
+
+  const useLocalIdentity = opts.useLocalIdentity !== false;
+  const signingIdentity = useLocalIdentity
+    ? ensureLocalIdentity(opts.identityName ?? DEFAULT_SIGNING_IDENTITY)
+    : "-";
+
+  execFileSync(
+    "codesign",
+    [
+      "--force",
+      "--sign",
+      signingIdentity,
+      "--options",
+      "runtime",
+      "--entitlements",
+      entitlementsPath,
+      bundlePath,
+    ],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+
+  return signingIdentity;
+}
+
 function walkAndSign(root: string, signingIdentity: string): void {
   const failures: string[] = [];
   walkAndSignInto(root, root, signingIdentity, failures);

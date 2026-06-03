@@ -25,6 +25,10 @@ import { logs } from "./commands/logs.js";
 import { pluginList, pluginSetEnabled, configGet, configSet, doctor, pluginCheckUpdates } from "./commands/manage.js";
 import { installWatcher, uninstallWatcher, watcherStatus } from "./commands/watch.js";
 import { createPlugin, validatePlugin } from "./commands/scaffold.js";
+import { isBackendName, type BackendName } from "./backends/index.js";
+import { proxy, type ProxySubcommand } from "./commands/proxy.js";
+import { permissions } from "./commands/permissions.js";
+import { pair } from "./commands/pair.js";
 
 function printHelp(): void {
   console.log(`
@@ -44,19 +48,27 @@ Usage:
   desktop-proxy plugin check-updates  Check plugins' githubRepo for newer releases
   desktop-proxy config get [key]      Print config (or a single key)
   desktop-proxy config set <key> <v>  Set a config key (logLevel, stealth, safeMode, autoUpdate)
-  desktop-proxy watch install         Auto re-apply the patch when the app updates (macOS)
+  desktop-proxy watch install         Auto re-apply the patch when the app updates (macOS/Linux/Windows)
   desktop-proxy watch uninstall       Remove the auto-repair watcher
   desktop-proxy watch status          Show watcher state
   desktop-proxy create-plugin <dir>   Scaffold a new plugin
   desktop-proxy validate-plugin <dir> Validate a plugin's manifest and entry
+  desktop-proxy proxy <on|off|status> Configure a renderer/ext-host proxy for VS Code forks (no injection)
+  desktop-proxy permissions [--open <id>] Re-grant OS permissions after install (macOS TCC; opens Settings)
+  desktop-proxy pair [--name <label>] Show a QR/link to pair a phone with the remote bus (NATS; see docs/nats-deploy.md)
 
 Options:
   --app <path>      Path to the .app bundle (auto-detected if omitted)
+  --backend <name>  Injection backend: asar (default) | dyld (not yet implemented)
   --no-fuse         Skip Electron fuse flipping
   --no-resign       Skip code re-signing (macOS)
   --if-needed       repair only if the app is not already patched
   --follow, -f      Follow the log output (logs command)
   --lines <n>       Number of lines to print (logs command, default 200)
+  --server <host:port>     Proxy address (proxy on)
+  --bypass <list>          Proxy bypass list (proxy on)
+  --ca <path>              CA cert path to print NODE_EXTRA_CA_CERTS hint (proxy on)
+  --strict-ssl             Keep TLS verification on (proxy on; default off)
   --id/--name/--scope <v>  create-plugin manifest fields
   --json            Machine-readable output (doctor, plugin/config/validate)
   --quiet           Suppress progress output
@@ -98,6 +110,18 @@ async function main(): Promise<void> {
     const a = args[i];
     if (a === "--app" && args[i + 1]) {
       opts.app = args[++i];
+    } else if (a === "--backend" && args[i + 1]) {
+      opts.backend = args[++i];
+    } else if (a === "--server" && args[i + 1]) {
+      opts.server = args[++i];
+    } else if (a === "--bypass" && args[i + 1]) {
+      opts.bypass = args[++i];
+    } else if (a === "--ca" && args[i + 1]) {
+      opts.ca = args[++i];
+    } else if (a === "--strict-ssl") {
+      opts.strictSSL = true;
+    } else if (a === "--open" && args[i + 1]) {
+      opts.open = args[++i];
     } else if (a === "--no-fuse") {
       opts.noFuse = true;
     } else if (a === "--no-resign") {
@@ -134,15 +158,25 @@ async function main(): Promise<void> {
   }
 
   switch (command) {
-    case "install":
+    case "install": {
+      let backend: BackendName | undefined;
+      if (typeof opts.backend === "string") {
+        if (!isBackendName(opts.backend)) {
+          console.error(`Unknown backend "${opts.backend}". Valid: asar, dyld.`);
+          process.exit(1);
+        }
+        backend = opts.backend;
+      }
       await install({
         app: opts.app as string | undefined,
+        backend,
         noFuse: opts.noFuse as boolean | undefined,
         noResign: opts.noResign as boolean | undefined,
         quiet: opts.quiet as boolean | undefined,
         verbose: opts.verbose as boolean | undefined,
       });
       break;
+    }
 
     case "uninstall":
       uninstall(opts.quiet as boolean | undefined);
@@ -151,6 +185,34 @@ async function main(): Promise<void> {
     case "status":
       status();
       break;
+
+    case "permissions":
+      permissions({
+        open: opts.open as string | undefined,
+        openRoot: !opts.open && !json,
+        json,
+      });
+      break;
+
+    case "pair":
+      await pair({ name: opts.name as string | undefined });
+      break;
+
+    case "proxy": {
+      const sub = (positionals[1] as ProxySubcommand | undefined) ?? "status";
+      if (sub !== "on" && sub !== "off" && sub !== "status") {
+        console.error(`Unknown proxy subcommand "${sub}". Use: on | off | status.`);
+        process.exit(1);
+      }
+      proxy(sub, {
+        app: opts.app as string | undefined,
+        server: opts.server as string | undefined,
+        bypass: opts.bypass as string | undefined,
+        ca: opts.ca as string | undefined,
+        strictSSL: opts.strictSSL as boolean | undefined,
+      });
+      break;
+    }
 
     case "logs":
       logs({

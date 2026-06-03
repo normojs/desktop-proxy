@@ -1,13 +1,25 @@
 /**
- * Uninstall command — restores the original app.asar from backup.
+ * Uninstall command — restores the app via the backend recorded in state.json.
  */
 
-import { existsSync, cpSync, rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
 import { locateApp } from "../platform.js";
 import { signAppBundle, clearQuarantine } from "../codesign.js";
+import { uninstallWatcher } from "./watch.js";
+import { getBackend, DEFAULT_BACKEND, isBackendName, type BackendContext, type BackendName } from "../backends/index.js";
+
+function readBackendName(userRoot: string): BackendName {
+  try {
+    const state = JSON.parse(readFileSync(join(userRoot, "state.json"), "utf8"));
+    if (typeof state.backend === "string" && isBackendName(state.backend)) return state.backend;
+  } catch {
+    // no/invalid state → assume the historical default
+  }
+  return DEFAULT_BACKEND;
+}
 
 export function uninstall(quiet = false): void {
   const log = quiet ? () => {} : (msg: string) => console.log(`  ${msg}`);
@@ -16,46 +28,43 @@ export function uninstall(quiet = false): void {
     const codex = locateApp();
     const userRoot = join(homedir(), ".desktop-proxy");
     const backupDir = join(userRoot, "backup");
+    const backend = getBackend(readBackendName(userRoot));
 
-    // Restore app.asar from backup
-    const backupAsar = join(backupDir, "app.asar");
-    if (existsSync(backupAsar)) {
-      cpSync(backupAsar, codex.asarPath);
-      log("Restored original app.asar");
-    } else {
-      console.warn("  Warning: No backup found for app.asar");
+    // Remove the auto-repair watcher first, so it can't re-apply mid-uninstall.
+    try {
+      uninstallWatcher({ quiet: true });
+    } catch {
+      // best-effort
     }
 
-    // Restore app.asar.unpacked
-    const backupUnpacked = join(backupDir, "app.asar.unpacked");
-    if (existsSync(backupUnpacked)) {
-      const unpackedDest = `${codex.asarPath}.unpacked`;
-      rmSync(unpackedDest, { recursive: true, force: true });
-      cpSync(backupUnpacked, unpackedDest, { recursive: true });
-      log("Restored app.asar.unpacked");
-    }
+    const ctx: BackendContext = {
+      install: codex,
+      userRoot,
+      runtimeDir: join(userRoot, "runtime"),
+      backupDir,
+      log,
+    };
+    backend.revert(ctx);
 
-    // Restore Electron Framework from backup
-    const backupFramework = join(backupDir, "Electron Framework");
-    if (existsSync(backupFramework) && existsSync(codex.electronBinary)) {
-      cpSync(backupFramework, codex.electronBinary);
-      log("Restored Electron Framework");
-    }
-
-    // Re-sign on macOS
+    // Re-sign on macOS (shared) after restoring files.
     if (codex.platform === "darwin") {
       clearQuarantine(codex.appRoot);
       try {
         signAppBundle(codex.appRoot);
         log("Re-signed app bundle");
       } catch {
-        // ad-hoc sign
+        // best-effort
       }
     }
 
-    console.log(`\n  ✓ desktop-proxy uninstalled from ${codex.appName}.`);
+    // Remove install state so status/doctor no longer report "installed".
+    try {
+      rmSync(join(userRoot, "state.json"), { force: true });
+    } catch {
+      // best-effort
+    }
 
-    // Optionally clean up user data
+    console.log(`\n  ✓ desktop-proxy uninstalled from ${codex.appName} (backend: ${backend.name}).`);
     console.log(`\n  User data is preserved at ${userRoot}.`);
     console.log(`  To remove it: rm -rf ${userRoot}`);
   } catch (e) {

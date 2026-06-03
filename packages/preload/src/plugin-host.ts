@@ -16,6 +16,7 @@ import type {
   PluginSettings,
   ReactAPI,
   PluginIPC,
+  PluginEvents,
   PluginNetwork,
   PluginFS,
   PluginCDPCore,
@@ -23,8 +24,17 @@ import type {
   PluginApp,
   UnsubscribeFn,
   LogLevel,
+  NetworkRequest,
+  NetworkResponse,
+  NetworkInterceptHandler,
+  NetworkResponseInterceptHandler,
+  NetworkInterceptFilter,
+  NetworkRequestControl,
+  NetworkResponseControl,
 } from "@desktop-proxy/plugin-sdk";
-import { isLevelEnabled, createCDP } from "@desktop-proxy/plugin-sdk";
+import { isLevelEnabled, createCDP, createBusRouter, type BusRouter, type BusTransport } from "@desktop-proxy/plugin-sdk";
+
+import { createRendererIpcTransport } from "./bus-ipc";
 
 import type { IpcRenderer, IpcRendererEvent } from "electron";
 
@@ -44,6 +54,32 @@ function getIpcRenderer(): IpcRenderer {
   }
   return _ipcRenderer!;
 }
+
+// ── Message bus (renderer leaf) ──────────────────────────────────────────────
+// A single leaf router over one IPC channel carries api.events (pub/sub) and RPC.
+// The transport (its ipcRenderer listener) is created once; on teardown we drop
+// the router (and repoint the transport to a no-op) so stale subs don't fire.
+let _busTransport: BusTransport | null = null;
+let _bus: BusRouter | null = null;
+
+function getBus(): BusRouter {
+  if (!_busTransport) _busTransport = createRendererIpcTransport(getIpcRenderer(), ch("bus"));
+  if (!_bus) {
+    _bus = createBusRouter();
+    _bus.addTransport("ipc", _busTransport);
+  }
+  return _bus;
+}
+
+function clearBus(): void {
+  _busTransport?.setReceiver(() => {});
+  _bus = null;
+}
+
+const eventsApi: PluginEvents = {
+  on: (topic, handler) => getBus().subscribe(topic, (data) => handler(data)),
+  emit: (topic, data) => getBus().publish(topic, data),
+};
 
 // ── Plugin State ─────────────────────────────────────────────────────────────
 
@@ -135,32 +171,34 @@ function createPluginAPI(manifest: PluginManifest): { api: PluginAPI; dispose: (
     isEnabled: (level) => isLevelEnabled(level, currentLogLevel),
   };
 
+  // Storage is backed by the MAIN process (durable + shared with main-scope and
+  // across windows). Snapshot synchronously on init, then serve get/all from the
+  // cache and write-through set/delete to main.
+  let storageSnap: Record<string, unknown> = {};
+  try {
+    storageSnap = (getIpcRenderer().sendSync(ch("storage:snapshot"), id) as Record<string, unknown>) ?? {};
+  } catch {
+    storageSnap = {};
+  }
   const storage: PluginStorage = {
-    get: <T>(key: string, defaultValue?: T): T => {
+    get: <T>(key: string, defaultValue?: T): T => (key in storageSnap ? (storageSnap[key] as T) : (defaultValue as T)),
+    set: (key: string, value: unknown) => {
+      storageSnap[key] = value;
       try {
-        const data = JSON.parse(localStorage.getItem(`desktop-proxy:storage:${id}`) ?? "{}");
-        return key in data ? data[key] : (defaultValue as T);
+        getIpcRenderer().send(ch("storage:set"), id, key, value);
       } catch {
-        return defaultValue as T;
+        /* main unavailable */
       }
     },
-    set: (key: string, value: unknown) => {
-      try {
-        const data = JSON.parse(localStorage.getItem(`desktop-proxy:storage:${id}`) ?? "{}");
-        data[key] = value;
-        localStorage.setItem(`desktop-proxy:storage:${id}`, JSON.stringify(data));
-      } catch {}
-    },
     delete: (key: string) => {
+      delete storageSnap[key];
       try {
-        const data = JSON.parse(localStorage.getItem(`desktop-proxy:storage:${id}`) ?? "{}");
-        delete data[key];
-        localStorage.setItem(`desktop-proxy:storage:${id}`, JSON.stringify(data));
-      } catch {}
+        getIpcRenderer().send(ch("storage:delete"), id, key);
+      } catch {
+        /* main unavailable */
+      }
     },
-    all: () => {
-      try { return JSON.parse(localStorage.getItem(`desktop-proxy:storage:${id}`) ?? "{}"); } catch { return {}; }
-    },
+    all: () => ({ ...storageSnap }),
   };
 
   const settings: PluginSettings = {
@@ -231,15 +269,24 @@ function createPluginAPI(manifest: PluginManifest): { api: PluginAPI; dispose: (
     ? {
         onRequest: (handler) => remember(onRequest(handler)),
         onResponse: (handler) => remember(onResponse(handler)),
-        intercept: () => {
-          // Renderer-scope intercept (IPC round-trip) is a later phase; full
-          // request interception currently runs main-side via CDP Fetch. Use a
-          // main-scope plugin with config `cdpIntercept` enabled.
-          log.warn("api.network.intercept is not yet available to renderer plugins; use a main-scope plugin");
+        // Renderer-scope interception: handlers run here; main pauses via CDP
+        // Fetch (requires config `cdpIntercept`) and routes the decision over IPC.
+        intercept: (handler, filter) => remember(addRequestInterceptor(handler, filter)),
+        interceptResponse: (handler, filter) => remember(addResponseInterceptor(handler, filter)),
+        transformStream: () => {
+          log.warn("api.network.transformStream is not yet available to renderer plugins; use a main-scope plugin");
           return () => {};
         },
-        interceptResponse: () => {
-          log.warn("api.network.interceptResponse is not yet available to renderer plugins; use a main-scope plugin");
+        onWebSocket: () => {
+          log.warn("api.network.onWebSocket is not yet available to renderer plugins; use a main-scope plugin");
+          return () => {};
+        },
+        transformWebSocket: () => {
+          log.warn("api.network.transformWebSocket is not yet available to renderer plugins; use a main-scope plugin");
+          return () => {};
+        },
+        raceRequest: () => {
+          log.warn("api.network.raceRequest is not yet available to renderer plugins; use a main-scope plugin");
           return () => {};
         },
       }
@@ -254,6 +301,18 @@ function createPluginAPI(manifest: PluginManifest): { api: PluginAPI; dispose: (
           throw new Error(`Plugin ${id} lacks the "network" permission`);
         },
         interceptResponse: () => {
+          throw new Error(`Plugin ${id} lacks the "network" permission`);
+        },
+        transformStream: () => {
+          throw new Error(`Plugin ${id} lacks the "network" permission`);
+        },
+        onWebSocket: () => {
+          throw new Error(`Plugin ${id} lacks the "network" permission`);
+        },
+        transformWebSocket: () => {
+          throw new Error(`Plugin ${id} lacks the "network" permission`);
+        },
+        raceRequest: () => {
           throw new Error(`Plugin ${id} lacks the "network" permission`);
         },
       };
@@ -304,6 +363,7 @@ function createPluginAPI(manifest: PluginManifest): { api: PluginAPI; dispose: (
     settings,
     react,
     ipc: ipcBridge,
+    events: eventsApi,
     network,
     fs: fsApi,
     cdp,
@@ -345,6 +405,142 @@ function ensureCdpListening(): void {
 
 function clearCdpHandlers(): void {
   cdpHandlers.clear();
+}
+
+// ── Renderer-scope network interception (IPC round-trip) ─────────────────────
+// Main pauses requests/responses (CDP Fetch) and asks us to decide. We keep one
+// shared listener (not one per plugin) and a registry of the renderer's
+// interceptors; decisions are the same plain {action,...} objects main applies.
+
+type ReqDecision =
+  | { action: "continue"; mods?: unknown }
+  | { action: "fulfill"; response: unknown }
+  | { action: "fail"; reason?: string };
+type ResDecision = { action: "continue" } | { action: "fulfill"; response: unknown };
+
+interface ReqInterceptReg {
+  handler: NetworkInterceptHandler;
+  filter?: NetworkInterceptFilter;
+}
+interface ResInterceptReg {
+  handler: NetworkResponseInterceptHandler;
+  filter?: NetworkInterceptFilter;
+}
+
+const reqInterceptors = new Set<ReqInterceptReg>();
+const resInterceptors = new Set<ResInterceptReg>();
+let netInterceptWired = false;
+
+function matchesUrl(url: string, filter?: NetworkInterceptFilter): boolean {
+  if (!filter?.urls || filter.urls.length === 0) return true;
+  return filter.urls.some((u) => url.includes(u));
+}
+
+// Tell main which kinds of interceptors exist, so it only round-trips when needed.
+function syncNetReg(): void {
+  const responseUrls: string[] = [];
+  for (const r of resInterceptors) {
+    if (r.filter?.urls && r.filter.urls.length > 0) responseUrls.push(...r.filter.urls);
+    else responseUrls.push(""); // no filter = match all
+  }
+  try {
+    getIpcRenderer().send(ch("net:reg"), { request: reqInterceptors.size > 0, responseUrls });
+  } catch {
+    /* main not ready; will re-sync on next register */
+  }
+}
+
+async function resolveReqDecision(req: NetworkRequest): Promise<ReqDecision> {
+  for (const reg of reqInterceptors) {
+    if (!matchesUrl(req.url, reg.filter)) continue;
+    // Hold the decision in an object so it survives the control closures (a bare
+    // local would be narrowed to `null` by TS control-flow analysis).
+    const box: { d: ReqDecision | null } = { d: null };
+    const control: NetworkRequestControl = {
+      continue: (mods) => {
+        box.d ??= { action: "continue", mods };
+      },
+      fulfill: (response) => {
+        box.d ??= { action: "fulfill", response };
+      },
+      fail: (reason) => {
+        box.d ??= { action: "fail", reason };
+      },
+    };
+    try {
+      await reg.handler(req, control);
+    } catch {
+      continue;
+    }
+    if (box.d) return box.d;
+  }
+  return { action: "continue" };
+}
+
+async function resolveResDecision(res: NetworkResponse, url: string): Promise<ResDecision> {
+  for (const reg of resInterceptors) {
+    if (!matchesUrl(url, reg.filter)) continue;
+    const box: { d: ResDecision | null } = { d: null };
+    const control: NetworkResponseControl = {
+      continue: () => {
+        box.d ??= { action: "continue" };
+      },
+      fulfill: (response) => {
+        box.d ??= { action: "fulfill", response };
+      },
+    };
+    try {
+      await reg.handler(res, control);
+    } catch {
+      continue;
+    }
+    if (box.d && box.d.action === "fulfill") return box.d;
+  }
+  return { action: "continue" };
+}
+
+function wireNetInterceptOnce(): void {
+  if (netInterceptWired) return;
+  netInterceptWired = true;
+  const ipc = getIpcRenderer();
+  ipc.on(ch("net:req-paused"), (_e: IpcRendererEvent, msg: { pauseId: string; req: NetworkRequest }) => {
+    void resolveReqDecision(msg.req).then((decision) =>
+      ipc.send(ch("net:decision"), { pauseId: msg.pauseId, decision }),
+    );
+  });
+  ipc.on(ch("net:res-paused"), (_e: IpcRendererEvent, msg: { pauseId: string; res: NetworkResponse; url: string }) => {
+    void resolveResDecision(msg.res, msg.url).then((decision) =>
+      ipc.send(ch("net:decision"), { pauseId: msg.pauseId, decision }),
+    );
+  });
+}
+
+function addRequestInterceptor(handler: NetworkInterceptHandler, filter?: NetworkInterceptFilter): UnsubscribeFn {
+  const reg: ReqInterceptReg = { handler, filter };
+  reqInterceptors.add(reg);
+  wireNetInterceptOnce();
+  syncNetReg();
+  return () => {
+    reqInterceptors.delete(reg);
+    syncNetReg();
+  };
+}
+
+function addResponseInterceptor(handler: NetworkResponseInterceptHandler, filter?: NetworkInterceptFilter): UnsubscribeFn {
+  const reg: ResInterceptReg = { handler, filter };
+  resInterceptors.add(reg);
+  wireNetInterceptOnce();
+  syncNetReg();
+  return () => {
+    resInterceptors.delete(reg);
+    syncNetReg();
+  };
+}
+
+function clearNetInterceptors(): void {
+  reqInterceptors.clear();
+  resInterceptors.clear();
+  syncNetReg();
 }
 
 function createRendererCDPCore(
@@ -458,4 +654,6 @@ export async function teardownPluginHost(): Promise<void> {
   // Belt-and-suspenders: also clear the shared framework-owned registries.
   clearNetworkHandlers();
   clearCdpHandlers();
+  clearNetInterceptors();
+  clearBus();
 }

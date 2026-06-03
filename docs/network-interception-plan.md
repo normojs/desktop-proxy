@@ -123,6 +123,11 @@ export interface PluginNetwork {
 `Network` **被动域**。**绝不用 `Fetch` 响应阶段取 body**——它会在响应头处暂停并由
 `getResponseBody` 缓冲整个 body，从而破坏 SSE/流式（与此前修复的 fetch 阻塞 bug 同性质）。
 
+> **要流式地「改写」响应**（而非整体缓冲）：用 **P-stream / `api.network.transformStream`**
+> （`packages/runtime/src/net/stream-transform.ts`）。它不走 `Fetch` 响应阶段，而是注入主世界
+> 包裹器把命中响应体接到 `TransformStream`，逐块/逐 SSE 事件交给插件函数处理，页面照常增量收到
+> 改写后的内容。`interceptResponse` 仍用于「整体替换命中 URL 的响应」，二者互补。
+
 - 启用：`Fetch.enable({ patterns: [{ urlPattern: "*", requestStage: "Request" }] })` + `Network.enable`。
 - **请求**：处理 `Fetch.requestPaused`（只会在请求阶段触发，无 `responseStatusCode`）：
   构造 `NetworkRequest{source:"renderer-cdp"}`（`request.postData` 取请求体），走
@@ -241,9 +246,11 @@ class NetworkHub {
 | **P1 ✅(已完成)** | 腿2 Node http/https monkey-patch（**观察**：请求含 body + 响应截断，加 source；改写/block 留待 intercept 控制 API） | 最大缺口、自包含 | 无 |
 | **P2 ✅(已完成)** | 腿1 CDP **Network 被动域**渲染观察（旁路 + 取 body，流式安全），feed main api.network；`source:"renderer-cdp"`；config `cdpNetwork` 开关 | 高（绕开 contextIsolation） | 现有 CDP 层 |
 | **P3a ✅(已完成)** | `api.network.intercept`（continue/fulfill/fail）经 CDP Fetch 请求阶段 + `interceptResponse`（改写真实响应，**仅命中 URL 缓冲**，其余保持流式）；**主作用域**决策；config `cdpIntercept`；决策超时兜底 | 完整改写/mock/block + 响应改写（主作用域） | P2 |
-| **P3b** | 渲染插件 intercept 的 IPC 往返（NetworkHub 路由到拥有该 wc 的渲染插件） | 渲染作用域 intercept | P3a |
-| **P4** | WebSocket 旁路（CDP 事件）`onWebSocket`；可选出站改写 | 中 | P2 |
-| **P5** | http2 / undici / EventSource；流量查看页 + HAR 导出 | 补全 | P1–P4 |
+| **P-stream ✅(已完成)** | `api.network.transformStream`（**流式安全**改写流式响应）：主作用域注册 → CDP `Page.addScriptToEvaluateOnNewDocument` 注入主世界包裹器覆写 `fetch`，命中 URL 的响应体经 `TransformStream` 逐块/逐 SSE 事件交给插件函数（在页面内执行），返回值替换该块、`null` 丢弃、`undefined` 透传；观察数据经 `Runtime.addBinding(__dpEmit)` 回流主进程；`__dpReady` 在每次导航后重推变换器；config `cdpStreamTransform` | 唯一不破坏流式的响应改写路径（SSE/token 流） | 现有 CDP 层 |
+| **P3b ✅(已完成)** | 渲染作用域插件的 `intercept`/`interceptResponse` 经 IPC 往返：渲染端注册处理器并向主进程上报「有哪些拦截器 + 响应过滤 URL」（`net:reg`），主进程在 CDP Fetch 暂停时先问主作用域、未决再把请求/响应转给拥有该 wc 的渲染插件（`net:req-paused`/`net:res-paused`），等回决策（`net:decision`，超时兜底 continue），由 `net/renderer-intercept.ts` 路由；wc 销毁清理。仍需 `cdpIntercept`（Fetch 机制） | 渲染作用域 intercept | P3a |
+| **P4 ✅(已完成)** | WebSocket 旁路观察 `api.network.onWebSocket`（CDP `Network.webSocket*` 事件：open/sent/received/close/error，随 `cdpNetwork`，按 `hasWebSocketHandlers` 跳过开销）+ **双向改写** `api.network.transformWebSocket`（主世界：出站覆写 `WebSocket.prototype.send`；入站包裹 `addEventListener("message")`/`onmessage`，命中文本帧经插件函数 替换/`null` 丢弃/`undefined` 透传，入站替换会重建 `MessageEvent`，二进制帧不动；`ctx.direction` 区分收发；config `cdpWsTransform`）。两个主世界包裹器（fetch 流 + WS）合并到单一注入宿主 `net/main-world.ts`，共用 `__dpEmit`/`__dpReady` binding | 中（实时 WS 观察 + 双向改写） | P2 |
+| **P-race ✅(已完成)** | `api.network.raceRequest(filter, opts)`：把命中的**主进程请求**扇出成多变体（不同 key/端点/模型），返回**首个被接受**的响应（`net/race.ts` 纯引擎，可单测）。**流式安全**（仅凭 status+headers 判定、胜者 body 直通、败者 abort）。支持 `mode: "race"\|"fallback"`、`concurrency`、`perRequestTimeoutMs`、`totalTimeoutMs(0=不限)`、自定义 `accept`、`onResult` 遥测；全失败回退最后真实响应/原始请求。覆盖**全局 fetch（undici）**与 **http/https**（后者用 Writable 假 ClientRequest + 原始 request 跑变体避免递归，发 winner 的 IncomingMessage；均 Node 实测）。**渲染层**：主世界 `RACE_WRAPPER_SOURCE` 覆写页面 fetch、在页内复刻竞速（config `cdpRaceRequest`，`variants`/`accept` 序列化注入，`onResult` 经 binding 回流）。三层全覆盖 | 多 key/端点故障转移 | P1 |
+| **P5 ✅(已完成)** | **流量查看页 + HAR 导出**：主进程 `net/traffic-recorder.ts` 订阅 hub 的 onRequest/onResponse/onWebSocket（覆盖 web-request/node-http/renderer-cdp 三源），环形缓冲（默认 500，config `captureTraffic` 开关、默认关），内置「Network」设置页列出最近流量并导出 HAR 1.2（WS 帧用 Chrome `_webSocketMessages` 扩展）。**Node 侧拦截扩展**：`node-intercept` 在 http/https 之外新增 **全局 `fetch`（undici）** 与 **`http2`** 客户端观察（请求含 body + 响应体，命中文/JSON 截断、event-stream/二进制仅元数据；幂等 `__dpPatched`）。EventSource 主进程少见且渲染端已由 CDP 覆盖，暂不单独 patch | 补全 | P1–P4 |
 
 每阶段：实现 + 纯逻辑单测（归一化/截断/决策选择）+ README 更新 + 提交。
 
@@ -256,8 +263,8 @@ class NetworkHub {
 
 ## 11. 测试策略
 
-- 纯逻辑单测（Vitest）：options 归一化、body 截断、`intercept` 首个 act 选择、decision 超时回退、WS 帧解析。
-- 拦截器本体依赖 Electron/Node 运行时，难单测 → 提供一个最小 Electron 冒烟脚本（手动/可选 CI）。
+- 纯逻辑单测（Vitest）：options 归一化、body 截断、`intercept` 首个 act 选择、decision 超时回退、WS 帧解析；主世界 fetch 流 / WS 包裹器（用 Node 全局流/WebSocket 跑真实变换）；流量录制器 + HAR；渲染拦截路由（注册门控/往返/超时/清理）。
+- 拦截器本体依赖 Electron/Chromium，难单测 → **最小 Electron 冒烟脚本** `scripts/smoke/main.js`（`pnpm build && pnpm smoke`）：临时 userRoot + 生成的主作用域插件，真实 BrowserWindow 跑 observe / block / mock / SSE 改写并断言。手动/可选 CI（需 Electron 二进制）。
 
 ---
 

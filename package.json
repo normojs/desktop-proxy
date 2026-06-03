@@ -14,7 +14,8 @@
     "clean": "pnpm -r clean",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "smoke": "electron scripts/smoke/main.js"
   },
   "engines": {
     "node": ">=18"

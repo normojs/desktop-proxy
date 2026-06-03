@@ -88,7 +88,7 @@ This is a [pnpm](https://pnpm.io) workspace monorepo.
 | `packages/runtime` | `@desktop-proxy/runtime` | Main-process runtime. Hooks Electron sessions, manages plugins, exposes the IPC bridge, watches plugins for hot reload. |
 | `packages/preload` | `@desktop-proxy/preload` | Renderer preload. React hook + network interceptor + plugin host. |
 | `packages/plugin-sdk` | `@desktop-proxy/plugin-sdk` | TypeScript types and `validateManifest()` for plugin authors. |
-| `packages/installer` | `@desktop-proxy/installer` | The `desktop-proxy` CLI: asar patching, fuse flipping, code signing, install/uninstall/status/repair. |
+| `packages/installer` | `@desktop-proxy/installer` | The `desktop-proxy` CLI (macOS/Linux/Windows): pluggable injection backends (asar today), fuse flipping, code signing, install/uninstall/status/repair, cross-platform auto-repair watcher, and a `proxy` config path for VS Code forks. |
 | `packages/plugins/request-interceptor` | — | Bundled example plugin that captures AI-service requests/responses. |
 
 `third-project/` contains vendored reference projects ([codex-plusplus](./third-project/codex-plusplus)
@@ -111,6 +111,12 @@ and [v8_killer](./third-project/v8_killer)) and is excluded from version control
 pnpm install
 pnpm build
 ```
+
+`pnpm build` runs `tsc` for type-checking/`.d.ts` **and** esbuild to produce the
+self-contained bundles the installer stages into the target app: the runtime →
+`packages/runtime/dist/main.js` and the preload → `packages/preload/dist/preload.js`
+(both with `electron` left external). The loader loads `runtime/main.js` and
+registers `runtime/preload.js`, so these bundles are required for a working install.
 
 Per-package builds are also available:
 
@@ -147,9 +153,11 @@ node packages/installer/dist/cli.js <command> [options]
 
 | Command | Description |
 |---|---|
-| `install` | Patch an Electron app and stage the runtime. |
-| `uninstall` | Restore the original app from backup. |
-| `status` | Show installation state, asar hash, and fuse state. |
+| `install [--backend asar\|dyld]` | Inject the runtime into an Electron app (default backend `asar`; `dyld` reserved for a future fallback). |
+| `uninstall` | Restore the original app via the backend recorded in state. |
+| `status` | Show installation state, backend, injection status, asar hash, fuse. |
+| `proxy <on\|off\|status> --server <host:port>` | Point a VS Code-derived app (Cursor/Windsurf) at a proxy via `settings.json`/`argv.json` — **no injection**. Renderer/extension-host only; the app's own AI/main-process traffic needs `install`. |
+| `permissions [--open <id>]` | macOS: re-signing resets the app's TCC permissions; this opens the right System Settings pane + guides a **one-time** re-grant (it persists across updates via the stable local cert). No-op on Windows/Linux. |
 | `repair` | Re-apply patches after the target app updates. |
 | `safe-mode [on\|off]` | Run the app with all plugins disabled (toggles if no value given). |
 | `logs [--follow] [--lines N]` | Print (or live-tail) the runtime log. |
@@ -158,8 +166,8 @@ node packages/installer/dist/cli.js <command> [options]
 | `plugin enable\|disable <id>` | Enable/disable a plugin (applied live if the app is running). |
 | `plugin check-updates [--json]` | Check each plugin's `githubRepo` for a newer release. |
 | `config get [key] [--json]` | Print the config (or a single key). |
-| `config set <key> <value>` | Set a config key (`logLevel`, `stealth`, `safeMode`, `autoUpdate`, `enforcePermissions`, `maxResponseBodyBytes`, `cdpNetwork`, `cdpIntercept`). |
-| `watch install\|uninstall\|status` | Auto re-apply the patch when the app updates (macOS). |
+| `config set <key> <value>` | Set a config key (`logLevel`, `stealth`, `safeMode`, `autoUpdate`, `enforcePermissions`, `maxResponseBodyBytes`, `cdpNetwork`, `cdpIntercept`, `cdpStreamTransform`, `cdpWsTransform`, `cdpRaceRequest`, `captureTraffic`, `persistTraffic`). |
+| `watch install\|uninstall\|status` | Auto re-apply the patch when the app updates (macOS launchd, Linux systemd `.path`, Windows logon task). |
 | `create-plugin <dir>` | Scaffold a new plugin (`--id` / `--name` / `--scope`). |
 | `validate-plugin <dir> [--json]` | Validate a plugin's manifest and entry file. |
 
@@ -215,7 +223,7 @@ Everything user-editable stays in `~/.desktop-proxy/`:
 | Loader patch | inside the target `app.asar` |
 | Runtime | `~/.desktop-proxy/runtime/` |
 | Plugins | `~/.desktop-proxy/plugins/` |
-| Per-plugin key/value (`api.storage`) | `~/.desktop-proxy/plugin-<id>.json` |
+| Per-plugin key/value (`api.storage`, both scopes) | `~/.desktop-proxy/plugin-<id>.json` |
 | Per-plugin files (`api.fs` sandbox) | `~/.desktop-proxy/plugin-data/<id>/` |
 | Config | `~/.desktop-proxy/config.json` |
 | Install state | `~/.desktop-proxy/state.json` |
@@ -318,11 +326,12 @@ re-runs renderer plugins when files change.
 | `api.manifest` | The plugin's parsed manifest. |
 | `api.process` | `"main"` or `"renderer"`. |
 | `api.log` | Leveled logging (`debug`/`info`/`warn`/`error`) forwarded to `main.log`, plus `isEnabled(level)` to guard expensive logs. |
-| `api.storage` | Persistent key/value store (`localStorage` in renderer, JSON file in main). |
+| `api.storage` | Persistent key/value store backed by the **main process** (JSON file per plugin under the user root). Renderer plugins proxy over IPC (sync snapshot on init + write-through), so storage is durable, shared across windows, and consistent for `scope: "both"` plugins. |
 | `api.settings` | `registerSection` / `registerPage`, rendered in the framework's overlay panel. |
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement` (renderer). |
 | `api.ipc` | Namespaced `on` / `send` / `invoke` between main and renderer. |
-| `api.network` | `onRequest` / `onResponse` observe hooks; `intercept(handler, filter?)` for request control (`continue(mods)` / `fulfill(mock)` / `fail(block)`); `interceptResponse(handler, filter?)` to rewrite real responses. Observe is streaming-safe, capped (`maxResponseBodyBytes`), binary-skipped, and `source`-tagged. Main-scope plugins also see Node `http`/`https` (invisible to `webRequest`) and, with `cdpNetwork`, all renderer requests via CDP (works under `contextIsolation`). `intercept`/`interceptResponse` run main-side via CDP Fetch when `cdpIntercept` is enabled — only URLs matched by `interceptResponse` are buffered (others keep streaming). |
+| `api.events` | Pub/sub bus (`on(topic)` / `emit(topic, data)`) routed through main, spanning main ↔ all renderers ↔ plugins. The framework publishes `config:changed` / `plugins:changed`. |
+| `api.network` | `onRequest` / `onResponse` observe hooks; `intercept(handler, filter?)` for request control (`continue(mods)` / `fulfill(mock)` / `fail(block)`); `interceptResponse(handler, filter?)` to rewrite real responses; `transformStream(filter, fn, opts?)` to rewrite **streaming** responses without breaking streaming. Observe is streaming-safe, capped (`maxResponseBodyBytes`), binary-skipped, and `source`-tagged. Main-scope plugins also see main-process Node traffic invisible to `webRequest` — `http`/`https`, global `fetch` (undici), and `http2` — and, with `cdpNetwork`, all renderer requests via CDP (works under `contextIsolation`). `intercept`/`interceptResponse` run via CDP Fetch when `cdpIntercept` is enabled — only URLs matched by `interceptResponse` are buffered (others keep streaming). Both main-scope and renderer-scope plugins can register them: renderer handlers run in their renderer and the main process routes each pause to them over IPC (main-scope handlers are consulted first). `transformStream` (enable `cdpStreamTransform`) injects a main-world wrapper that pipes matched responses through a `TransformStream`, running your `fn` per chunk or per SSE event — return a replacement, `null` to drop, or `undefined` to pass through; `opts.emit`/`opts.onEmit` carry observations back to the main process. `onWebSocket(handler)` observes WebSocket lifecycle/frames (open/sent/received/close/error) passively via CDP (enable `cdpNetwork`). `transformWebSocket(filter, fn, opts?)` (enable `cdpWsTransform`) rewrites WS text frames in **both directions** in the main world (branch on `ctx.direction` — `"send"`/`"receive"`) — return a replacement, `null` to drop, or `undefined` to pass through (binary frames untouched). `raceRequest(filter, opts)` races/fails over a matched request — main-process global `fetch`/undici **and** `http`/`https`, plus renderer-origin fetches when `cdpRaceRequest` is enabled — across variants (different keys/endpoints/models), returning the first **accepted** response (streaming-safe; acceptance from status+headers; losers aborted). Supports `mode: "race"\|"fallback"`, `concurrency`, `perRequestTimeoutMs`, `totalTimeoutMs`, custom `accept`, and `onResult` telemetry. |
 | `api.fs` | Sandboxed file I/O confined to the plugin's data dir: `read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat` (utf8 or base64). |
 | `api.cdp` | Chrome DevTools Protocol: `attach`/`send`/`on`/`evaluate` plus `onResponse`/`onRequestPaused` helpers. Renderer targets its own webContents; main targets the focused window. Requires the `"cdp"` permission. |
 | `api.ui` | DOM helpers: `injectCSS()` (returns a remover) and `toast()` (host-isolated notification). |
@@ -390,6 +399,9 @@ The framework can be driven two ways, both backed by the same
 
 - **In-app management page** — a built-in "desktop-proxy" page in the overlay
   (alongside plugin pages) to toggle plugins, safe mode, log level, and stealth.
+- **In-app "Network" page** — a built-in traffic viewer (enable `captureTraffic`)
+  listing recent requests/responses/WebSocket frames across all capture sources,
+  with one-click **HAR export**.
 - **CLI** — `plugin enable/disable`, `config get/set`, `doctor` (great for
   scripts/agents, with `--json`).
 
@@ -476,8 +488,8 @@ In stealth mode the IPC channel names are also **randomized per session** (e.g.
 `dp-a1b2c3:list-plugins` instead of `desktop-proxy:list-plugins`), so the host
 app's own main process cannot enumerate handlers by a known name. Only the
 `desktop-proxy:config-sync` bootstrap channel keeps a fixed name (the preload
-uses it to learn the random prefix). Note: renderer `api.storage` still uses
-visible `localStorage` keys — use `api.fs` for persistence you want hidden.
+uses it to learn the random prefix). `api.storage` is backed by the main process
+(JSON file per plugin under the user root) and its IPC is prefixed too.
 
 Plugins are unaffected by randomization: `api.ipc.*` takes logical channel names
 that the framework prefixes consistently on both the main and renderer sides. A
@@ -531,6 +543,25 @@ logic — the highest-risk parts that are hard to eyeball:
 - `runtime`: the leveled `logger` (filtering, `setLevel`, namespaces, size cap)
   and the `fs-sandbox` path confinement + read/write round-trips.
 - `installer`: `fuses` read/write against a synthetic Electron binary buffer.
+
+It also covers the main-world fetch-stream and WebSocket wrappers (run against
+Node's global streams/WebSocket), the traffic recorder + HAR output, and the
+renderer-intercept router.
+
+For the CDP-only features that genuinely need Electron + Chromium (cdpNetwork
+observe, cdpIntercept block/mock, cdpStreamTransform SSE rewrite), a minimal
+end-to-end smoke is provided:
+
+```bash
+pnpm build && pnpm smoke   # requires the Electron binary
+```
+
+It boots the real runtime against a throwaway userRoot + generated plugin, drives
+a hidden `BrowserWindow` against an in-process HTTP server, and asserts each
+outcome (`scripts/smoke/main.js`). The window uses hardened `webPreferences`
+(`sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`) to mirror
+real IDEs like Cursor Desktop / Codex / Windsurf — proving the main-side CDP
+interception works under those conditions.
 
 Tests live in each package's `test/` directory (excluded from the `tsc` build).
 Electron/DOM-dependent code (sessions, `webContents.debugger`, the overlay) is

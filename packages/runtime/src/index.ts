@@ -17,6 +17,14 @@ import type { PluginCDPCore } from "@desktop-proxy/plugin-sdk";
 import { createMainNetwork, type MainNetwork } from "./network";
 import { createMainCDP, type MainCDP } from "./cdp";
 import { createCdpNetworkObserver, type CdpNetworkObserver } from "./net/cdp-network";
+import { createMainWorldHost, type MainWorldHost } from "./net/main-world";
+import { createTrafficRecorder, type TrafficRecorder } from "./net/traffic-recorder";
+import { createRendererInterceptRouter, type RendererInterceptRouter } from "./net/renderer-intercept";
+import { createTrafficWriter } from "./net/traffic-persist";
+import { createPluginStorage } from "./storage";
+import { createBusRouter, type BusRouter } from "@desktop-proxy/plugin-sdk";
+import { createMainIpcTransport } from "./bus-ipc";
+import type { NetDecision } from "./net/intercept";
 import { createLogger, parseLevel, type Logger } from "./logger";
 import {
   pluginDataDir,
@@ -54,6 +62,89 @@ const SAFE_MODE_FILE = path.join(userRoot, "safe-mode");
 fs.mkdirSync(LOG_DIR, { recursive: true });
 fs.mkdirSync(PLUGINS_DIR, { recursive: true });
 
+// Unified plugin KV store (single backend for api.storage in both scopes).
+const pluginStorage = createPluginStorage(userRoot);
+
+// Message bus (hub). One protocol for events (pub/sub) and RPC over pluggable
+// transports — Electron IPC now, NATS for remote/phone later. The main router is
+// the hub (bridge: true); renderer routers are leaves.
+let _bus: BusRouter | null = null;
+
+function getBus(): BusRouter {
+  if (!_bus) {
+    const electron = getElectron();
+    _bus = createBusRouter({ bridge: true });
+    _bus.addTransport("ipc", createMainIpcTransport(electron, ch("bus"), log));
+  }
+  return _bus;
+}
+
+/** Stable per-install id used in NATS subjects; generated + persisted on first use. */
+function getInstanceId(): string {
+  const cfg = readConfig();
+  if (cfg.instanceId) return cfg.instanceId;
+  const id = randomBytes(8).toString("hex");
+  writeConfig({ ...cfg, instanceId: id });
+  return id;
+}
+
+// Remote (NATS) transport lifecycle. Off by default; connecting attaches a
+// second transport to the hub router so the same protocol reaches CLI/phone.
+let _natsConn: { close(): Promise<void> } | null = null;
+
+async function syncRemote(): Promise<void> {
+  const r = readConfig().remote;
+  const wantOn = r?.enabled === true && typeof r.url === "string" && r.url.length > 0;
+
+  if (wantOn && !_natsConn) {
+    try {
+      const { connect } = await import("nats");
+      const name = `desktop-proxy:${getInstanceId()}`;
+      const tls = r!.caFile ? { tls: { caFile: r!.caFile } } : {};
+      let nc;
+      if (r!.accountSeed && r!.accountId) {
+        // Decentralized JWT: mint our own hub credentials locally.
+        const [{ mintHubCreds }, { jwtAuthenticator }] = await Promise.all([import("./net/remote-jwt.js"), import("nats")]);
+        const creds = await mintHubCreds(r!.accountSeed, r!.accountId, getInstanceId());
+        nc = await connect({
+          servers: r!.url,
+          authenticator: jwtAuthenticator(creds.jwt, new TextEncoder().encode(creds.seed)),
+          name,
+          ...tls,
+        });
+      } else {
+        nc = await connect({ servers: r!.url, user: r!.user, pass: r!.pass, name, ...tls });
+      }
+      _natsConn = nc;
+      const { createNatsHubTransport } = await import("./net/nats-transport.js");
+      getBus().addTransport("nats", createNatsHubTransport(nc, getInstanceId(), log));
+      log("info", "remote bus connected:", r!.url);
+      void (async () => {
+        for await (const s of nc.status()) log("debug", "nats status:", s.type);
+      })();
+    } catch (e) {
+      log("warn", "remote bus connect failed:", String(e));
+    }
+  } else if (!wantOn && _natsConn) {
+    getBus().removeTransport("nats");
+    try {
+      await _natsConn.close();
+    } catch {
+      /* ignore */
+    }
+    _natsConn = null;
+    log("info", "remote bus disconnected");
+  }
+}
+
+function emitEvent(topic: string, data: unknown): void {
+  getBus().publish(topic, data);
+}
+
+function onEvent(topic: string, handler: (data: unknown) => void): () => void {
+  return getBus().subscribe(topic, (data) => handler(data));
+}
+
 // ── Logging ──────────────────────────────────────────────────────────────────
 
 const LOG_FILE = path.join(LOG_DIR, "main.log");
@@ -87,20 +178,68 @@ interface Config {
   cdpNetwork?: boolean;
   /** Enable CDP Fetch request interception so api.network.intercept can modify/block/mock. */
   cdpIntercept?: boolean;
+  /** Inject a main-world wrapper so api.network.transformStream can rewrite streaming responses. */
+  cdpStreamTransform?: boolean;
+  /** Inject a main-world wrapper so api.network.transformWebSocket can rewrite outbound WS frames. */
+  cdpWsTransform?: boolean;
+  /** Inject a main-world wrapper so api.network.raceRequest also races renderer-origin fetches. */
+  cdpRaceRequest?: boolean;
+  /** Record recent network traffic for the built-in Network viewer + HAR export. */
+  captureTraffic?: boolean;
+  /** Also append finalized traffic to disk (log/traffic.ndjson) for post-mortem. */
+  persistTraffic?: boolean;
+  /** Stable id for this install, used in NATS subjects (auto-generated). */
+  instanceId?: string;
+  /** Remote bus over NATS (for CLI/phone). See docs/architecture-remote-bus.md. */
+  remote?: {
+    enabled?: boolean;
+    /** NATS server URL, e.g. tls://host:4222 or wss://host:443. */
+    url?: string;
+    /** Path to a CA cert to trust (for self-signed TLS). */
+    caFile?: string;
+    /**
+     * Decentralized JWT mode (recommended; zero server ops after one-time setup):
+     * the account signing-key seed + account public id let the desktop mint its
+     * own hub/device credentials. See docs/nats-deploy.md.
+     */
+    accountSeed?: string;
+    accountId?: string;
+    /** Static fallback: pre-provisioned user/pass (hub + device). */
+    user?: string;
+    pass?: string;
+    deviceUser?: string;
+    devicePass?: string;
+  };
   plugins?: Record<string, { enabled: boolean }>;
 }
 
+// In-memory cache so the hot paths (per-request maxResponseBodyBytes,
+// isPluginEnabled, etc.) don't synchronously read the file every time. The file
+// watcher invalidates it on external edits. Callers must not mutate the result.
+let _configCache: Config | null = null;
+
 function readConfig(): Config {
+  if (_configCache) return _configCache;
   try {
-    return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    _configCache = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")) as Config;
   } catch {
-    return {};
+    _configCache = {};
   }
+  return _configCache;
+}
+
+function invalidateConfigCache(): void {
+  _configCache = null;
 }
 
 function writeConfig(c: Config): void {
   try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(c, null, 2));
+    // Atomic write (tmp + rename) so concurrent writers (runtime, CLI) can't
+    // observe or leave a half-written file.
+    const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(c, null, 2));
+    fs.renameSync(tmp, CONFIG_FILE);
+    _configCache = c;
   } catch (e) {
     log("warn", "writeConfig failed:", String(e));
   }
@@ -151,6 +290,12 @@ function getElectron(): typeof import("electron") {
 // events only allow one listener each).
 let _mainNetwork: MainNetwork | null = null;
 
+// Return the network hub only if it already exists — used by diagnostics so we
+// don't instantiate it (and patch Node http) just to check whether it's in use.
+function peekMainNetwork(): MainNetwork | null {
+  return _mainNetwork;
+}
+
 function getMainNetwork(): MainNetwork {
   if (!_mainNetwork) {
     const electron = getElectron();
@@ -186,13 +331,107 @@ function getCdpNetworkObserver(): CdpNetworkObserver {
       maxBodyBytes: () => readConfig().maxResponseBodyBytes ?? 1024 * 1024,
       log,
       interceptEnabled: () => readConfig().cdpIntercept === true,
-      dispatchIntercept: (req) => net.dispatchIntercept(req),
-      hasResponseInterceptors: () => net.hasResponseInterceptors(),
-      responseInterceptMatches: (url) => net.responseInterceptMatches(url),
-      dispatchInterceptResponse: (res, url) => net.dispatchInterceptResponse(res, url),
+      hasResponseInterceptors: (wc) => net.hasResponseInterceptors() || getRendererInterceptRouter().wantsResponse(wc.id),
+      responseInterceptMatches: (url, wc) =>
+        net.responseInterceptMatches(url) || getRendererInterceptRouter().responseUrlsMatch(wc.id, url),
+      dispatchIntercept: async (req, wc) => {
+        const main = await net.dispatchIntercept(req);
+        if (acted(main)) return main;
+        return getRendererInterceptRouter().dispatchRequest(wc, req);
+      },
+      dispatchInterceptResponse: async (res, url, wc) => {
+        const main = await net.dispatchInterceptResponse(res, url);
+        if (main.action !== "continue") return main;
+        return getRendererInterceptRouter().dispatchResponse(wc, res, url);
+      },
+      observeWebSocket: (evt) => net.observeWebSocket(evt),
+      hasWebSocketHandlers: () => net.hasWebSocketHandlers(),
     });
   }
   return _cdpNetObserver;
+}
+
+// A decision "acts" if it blocks, mocks, or modifies — so main-scope wins and we
+// skip the renderer round-trip; a plain "continue" lets the renderer decide.
+function acted(d: NetDecision): boolean {
+  return d.action !== "continue" || (d.mods != null && Object.keys(d.mods).length > 0);
+}
+
+// Routes renderer-scope intercept/interceptResponse decisions over IPC.
+let _rendererIntercept: RendererInterceptRouter | null = null;
+// wc ids we've already warned about (renderer intercept while cdpIntercept off).
+const regWarned = new Set<number>();
+
+function getRendererInterceptRouter(): RendererInterceptRouter {
+  if (!_rendererIntercept) {
+    _rendererIntercept = createRendererInterceptRouter({
+      sendReqPaused: (wc, pauseId, req) => {
+        if (!wc.isDestroyed()) wc.send(ch("net:req-paused"), { pauseId, req });
+      },
+      sendResPaused: (wc, pauseId, res, url) => {
+        if (!wc.isDestroyed()) wc.send(ch("net:res-paused"), { pauseId, res, url });
+      },
+      log,
+    });
+  }
+  return _rendererIntercept;
+}
+
+// Main-world injector for page-side wrappers: streaming-response transform +
+// outbound WebSocket transform (config-gated).
+let _mainWorldHost: MainWorldHost | null = null;
+
+function getMainWorldHost(): MainWorldHost {
+  if (!_mainWorldHost) {
+    const net = getMainNetwork();
+    _mainWorldHost = createMainWorldHost(getMainCDP(), {
+      streamRegs: () => net.transformRegistrations(),
+      wsRegs: () => net.wsTransformRegistrations(),
+      raceRegs: () => net.raceRegistrations(),
+      onEmit: (id, data) => net.dispatchTransformEmit(id, data),
+      log,
+    });
+    net.setTransformListener((reg) => getMainWorldHost().registerStream(reg));
+    net.setWsTransformListener((reg) => getMainWorldHost().registerWs(reg));
+    net.setRaceListener((reg) => getMainWorldHost().registerRace(reg));
+  }
+  return _mainWorldHost;
+}
+
+// Recent-traffic ring for the built-in Network viewer + HAR export (config-gated).
+let _trafficRecorder: TrafficRecorder | null = null;
+
+function getTrafficRecorder(): TrafficRecorder {
+  if (!_trafficRecorder) {
+    _trafficRecorder = createTrafficRecorder(getMainNetwork(), () => FRAMEWORK_VERSION);
+  }
+  return _trafficRecorder;
+}
+
+let _trafficWriter: import("./net/traffic-persist").TrafficWriter | null = null;
+
+// Subscribe/unsubscribe the recorder + persistence sink to match the config.
+function syncTrafficCapture(): void {
+  try {
+    const cfg = readConfig();
+    const rec = getTrafficRecorder();
+    rec.setEnabled(cfg.captureTraffic === true);
+
+    if (cfg.persistTraffic === true && cfg.captureTraffic === true) {
+      if (!_trafficWriter) {
+        const dir = path.join(LOG_DIR, "traffic.ndjson");
+        _trafficWriter = createTrafficWriter(dir);
+        rec.setSink((entry) => _trafficWriter?.write(entry));
+        log("info", "traffic persistence enabled:", dir);
+      }
+    } else if (_trafficWriter) {
+      rec.setSink(null);
+      _trafficWriter.close();
+      _trafficWriter = null;
+    }
+  } catch (e) {
+    log("warn", "traffic capture sync failed:", String(e));
+  }
 }
 
 // CDP core for a main-process plugin. Targets the focused window (or the first
@@ -373,32 +612,14 @@ function createMainProcessAPI(manifest: import("@desktop-proxy/plugin-sdk").Plug
       isEnabled: (level) => rootLogger.isEnabled(level),
     },
     storage: {
-      get: <T>(key: string, defaultValue?: T): T => {
-        try {
-          const data = JSON.parse(fs.readFileSync(path.join(userRoot, `plugin-${manifest.id}.json`), "utf8"));
-          return key in data ? data[key] : (defaultValue as T);
-        } catch {
-          return defaultValue as T;
-        }
-      },
-      set: (key: string, value: unknown) => {
-        const filePath = path.join(userRoot, `plugin-${manifest.id}.json`);
-        let data: Record<string, unknown> = {};
-        try { data = JSON.parse(fs.readFileSync(filePath, "utf8")); } catch {}
-        data[key] = value;
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-      },
-      delete: (key: string) => {
-        const filePath = path.join(userRoot, `plugin-${manifest.id}.json`);
-        try {
-          const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
-          delete data[key];
-          fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-        } catch {}
-      },
-      all: () => {
-        try { return JSON.parse(fs.readFileSync(path.join(userRoot, `plugin-${manifest.id}.json`), "utf8")); } catch { return {}; }
-      },
+      get: <T>(key: string, defaultValue?: T): T => pluginStorage.get<T>(manifest.id, key, defaultValue),
+      set: (key: string, value: unknown) => pluginStorage.set(manifest.id, key, value),
+      delete: (key: string) => pluginStorage.delete(manifest.id, key),
+      all: () => pluginStorage.all(manifest.id),
+    },
+    events: {
+      on: (topic: string, handler: (data: unknown) => void) => onEvent(topic, handler),
+      emit: (topic: string, data?: unknown) => emitEvent(topic, data),
     },
     settings: {
       registerSection: () => ({ unregister: () => {} }),
@@ -483,16 +704,7 @@ function setupIPCBridge(): void {
   });
 
   // Plugin listing — preload asks main for the plugin list
-  electron.ipcMain.handle(ch("list-plugins"), async () => {
-    discoverPlugins();
-    return discoveredPlugins.map((p) => ({
-      manifest: p.manifest,
-      entry: p.entry,
-      dir: p.dir,
-      enabled: isPluginEnabled(p.manifest.id),
-      compatible: satisfiesMinVersion(FRAMEWORK_VERSION, p.manifest.minDesktopProxyVersion),
-    }));
-  });
+  electron.ipcMain.handle(ch("list-plugins"), async () => getBus().request("plugin.list"));
 
   // User paths — preload needs to know the user root
   electron.ipcMain.handle(ch("user-paths"), async () => ({
@@ -502,19 +714,12 @@ function setupIPCBridge(): void {
   }));
 
   // Config read
-  electron.ipcMain.handle(ch("get-config"), async () => ({
-    ...readConfig(),
-    version: FRAMEWORK_VERSION,
-  }));
+  electron.ipcMain.handle(ch("get-config"), async () => getBus().request("config.get"));
 
   // Toggle plugin enabled state
-  electron.ipcMain.handle(ch("toggle-plugin"), async (_e, id: string, enabled: boolean) => {
-    const cfg = readConfig();
-    cfg.plugins ??= {};
-    cfg.plugins[id] = { ...cfg.plugins[id], enabled };
-    writeConfig(cfg);
-    return { id, enabled };
-  });
+  electron.ipcMain.handle(ch("toggle-plugin"), async (_e, id: string, enabled: boolean) =>
+    getBus().request("plugin.toggle", { id, enabled }),
+  );
 
   // Toggle safe mode
   electron.ipcMain.handle(ch("toggle-safe-mode"), async (_e, enabled: boolean) => {
@@ -528,13 +733,66 @@ function setupIPCBridge(): void {
 
   // Merge a partial config (used by the in-app management page). The config
   // watcher then applies it live (log level immediately; plugins/safeMode reload).
-  electron.ipcMain.handle(ch("set-config"), async (_e, patch: Record<string, unknown>) => {
-    const cfg = readConfig() as Record<string, unknown>;
-    for (const [key, value] of Object.entries(patch ?? {})) {
-      cfg[key] = value;
+  electron.ipcMain.handle(ch("set-config"), async (_e, patch: Record<string, unknown>) =>
+    getBus().request("config.set", patch),
+  );
+
+  // Renderer-scope interception: the renderer reports which kinds of interceptors
+  // it has (so main only round-trips when needed) and returns pause decisions.
+  electron.ipcMain.on(ch("net:reg"), (e, state: { request: boolean; responseUrls: string[] }) => {
+    const wants = state?.request === true || (Array.isArray(state?.responseUrls) && state.responseUrls.length > 0);
+    getRendererInterceptRouter().setRegistration(e.sender.id, {
+      request: state?.request === true,
+      responseUrls: Array.isArray(state?.responseUrls) ? state.responseUrls : [],
+    });
+    if (wants && readConfig().cdpIntercept !== true && !regWarned.has(e.sender.id)) {
+      regWarned.add(e.sender.id);
+      log("warn", `renderer plugin registered intercept but cdpIntercept is OFF — enable: desktop-proxy config set cdpIntercept true`);
     }
-    writeConfig(cfg as Config);
+  });
+  electron.ipcMain.on(ch("net:decision"), (_e, msg: { pauseId: string; decision: unknown }) => {
+    if (msg?.pauseId) getRendererInterceptRouter().resolve(msg.pauseId, msg.decision as NetDecision);
+  });
+
+  // Network traffic viewer (built-in "Network" page) + HAR export.
+  electron.ipcMain.handle(ch("traffic:list"), async (_e, query?: string) => getBus().request("traffic.list", query));
+  electron.ipcMain.handle(ch("traffic:detail"), async (_e, id: string) => getBus().request("traffic.detail", id));
+  electron.ipcMain.handle(
+    ch("traffic:replay"),
+    async (_e, id: string, overrides?: { url?: string; method?: string; headers?: Record<string, string>; body?: string }) => {
+      if (typeof fetch !== "function") return { ok: false, error: "fetch is unavailable in this runtime" };
+      const d = getTrafficRecorder().detail(id);
+      if (!d) return { ok: false, error: "request not found" };
+      const url = overrides?.url ?? d.url;
+      const method = (overrides?.method ?? d.method ?? "GET").toUpperCase();
+      // When the editor supplies headers, use them verbatim (so a removed header
+      // is actually dropped); otherwise replay the recorded request headers.
+      const base = overrides?.headers ?? d.reqHeaders;
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(base)) {
+        if (!/^(host|content-length|connection|accept-encoding)$/i.test(k)) headers[k] = v;
+      }
+      const body = overrides?.body ?? (method === "GET" || method === "HEAD" ? undefined : d.reqBody ?? undefined);
+      try {
+        const res = await fetch(url, { method, headers, body });
+        log("info", `traffic: replayed ${method} ${url} → ${res.status}`);
+        return { ok: true, status: res.status };
+      } catch (e) {
+        return { ok: false, error: String(e) };
+      }
+    },
+  );
+  electron.ipcMain.handle(ch("traffic:clear"), async () => {
+    await getBus().request("traffic.clear");
     return { ok: true };
+  });
+  electron.ipcMain.handle(ch("traffic:export"), async (_e, query?: string) => {
+    const har = getTrafficRecorder().toHar(query);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const outPath = path.join(userRoot, `traffic-${stamp}.har`);
+    fs.writeFileSync(outPath, JSON.stringify(har, null, 2));
+    log("info", `traffic: exported HAR to ${outPath}`);
+    return { path: outPath, count: har.log.entries.length };
   });
 
   // App info
@@ -575,6 +833,98 @@ function setupIPCBridge(): void {
       enforcePermissions: readConfig().enforcePermissions === true,
       maxResponseBodyBytes: readConfig().maxResponseBodyBytes,
     };
+  });
+
+  // Unified plugin storage — renderer plugins proxy api.storage to the main
+  // backend: a synchronous snapshot on init, then write-through set/delete.
+  electron.ipcMain.on(ch("storage:snapshot"), (e, id: string) => {
+    try {
+      e.returnValue = pluginStorage.all(id);
+    } catch {
+      e.returnValue = {};
+    }
+  });
+  electron.ipcMain.on(ch("storage:set"), (_e, id: string, key: string, value: unknown) => {
+    try {
+      pluginStorage.set(id, key, value);
+    } catch (err) {
+      log("warn", "storage:set failed:", String(err));
+    }
+  });
+  electron.ipcMain.on(ch("storage:delete"), (_e, id: string, key: string) => {
+    try {
+      pluginStorage.delete(id, key);
+    } catch (err) {
+      log("warn", "storage:delete failed:", String(err));
+    }
+  });
+
+  // Initialize the message bus hub (registers the ch("bus") IPC channel so
+  // renderer leaves can connect for api.events and RPC).
+  const bus = getBus();
+
+  // Converged RPC methods — single source of truth on the bus. The legacy IPC
+  // handlers below delegate here, and remote clients (CLI/phone over NATS) get
+  // the same methods for free.
+  bus.handle("config.get", () => ({ ...readConfig(), version: FRAMEWORK_VERSION }));
+  bus.handle("config.set", (p) => {
+    const cfg = { ...readConfig(), ...((p as Record<string, unknown>) ?? {}) } as Config;
+    writeConfig(cfg);
+    return { ok: true };
+  });
+  bus.handle("plugin.list", () => {
+    discoverPlugins();
+    return discoveredPlugins.map((pl) => ({
+      manifest: pl.manifest,
+      entry: pl.entry,
+      dir: pl.dir,
+      enabled: isPluginEnabled(pl.manifest.id),
+      compatible: satisfiesMinVersion(FRAMEWORK_VERSION, pl.manifest.minDesktopProxyVersion),
+    }));
+  });
+  bus.handle("plugin.toggle", (p) => {
+    const { id, enabled } = (p as { id: string; enabled: boolean }) ?? {};
+    const prev = readConfig();
+    const cfg: Config = { ...prev, plugins: { ...prev.plugins, [id]: { ...prev.plugins?.[id], enabled } } };
+    writeConfig(cfg);
+    return { id, enabled };
+  });
+  bus.handle("traffic.list", (p) => {
+    const rec = getTrafficRecorder();
+    const entries = rec.list(p as string | undefined);
+    let bytes = 0;
+    let errors = 0;
+    let aiCalls = 0;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let costUsd = 0;
+    let hasCost = false;
+    for (const e of entries) {
+      if (e.bodyBytes) bytes += e.bodyBytes;
+      if (e.status != null && e.status >= 400) errors++;
+      if (e.category === "ai") {
+        aiCalls++;
+        if (e.usage) {
+          promptTokens += e.usage.promptTokens ?? 0;
+          completionTokens += e.usage.completionTokens ?? 0;
+          if (e.usage.costUsd != null) {
+            costUsd += e.usage.costUsd;
+            hasCost = true;
+          }
+        }
+      }
+    }
+    return {
+      enabled: rec.isEnabled(),
+      count: rec.count(),
+      entries,
+      stats: { bytes, errors, ai: { calls: aiCalls, promptTokens, completionTokens, costUsd: hasCost ? costUsd : null } },
+    };
+  });
+  bus.handle("traffic.detail", (p) => getTrafficRecorder().detail(p as string));
+  bus.handle("traffic.clear", () => {
+    getTrafficRecorder().clear();
+    return { ok: true };
   });
 
   // Sandboxed filesystem — renderer plugins reach disk through these handlers.
@@ -672,6 +1022,7 @@ function startConfigWatcher(): void {
       if (filename !== "config.json") return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
+        invalidateConfigCache();
         const cfg = readConfig();
 
         const level = parseLevel(process.env.DESKTOP_PROXY_LOG_LEVEL ?? cfg.logLevel, "info");
@@ -680,6 +1031,12 @@ function startConfigWatcher(): void {
           log("info", `config: logLevel → ${level}`);
         }
         broadcastToRenderers(ch("config-changed"), { logLevel: rootLogger.getLevel() });
+        emitEvent("config:changed", { logLevel: rootLogger.getLevel() });
+
+        // Start/stop the traffic recorder to match captureTraffic.
+        syncTrafficCapture();
+        // Connect/disconnect the remote (NATS) bus to match config.
+        void syncRemote();
 
         const plugins = JSON.stringify(cfg.plugins ?? {});
         const safeMode = cfg.safeMode === true;
@@ -688,6 +1045,7 @@ function startConfigWatcher(): void {
           lastSafeMode = safeMode;
           log("info", "config: plugins/safeMode changed; broadcasting reload");
           broadcastToRenderers(ch("plugins-changed"));
+          emitEvent("plugins:changed", null);
         }
       }, 250);
     });
@@ -740,12 +1098,18 @@ electron.app.on("web-contents-created", (_e, wc) => {
     wc.on("preload-error", (_ev, p, err) => {
       log("error", `wc ${wc.id} preload-error path=${p}`, String((err as Error)?.stack ?? err));
     });
+    wc.once("destroyed", () => getRendererInterceptRouter().cleanupWc(wc.id));
 
     // Renderer network observation/interception via CDP (opt-in).
-    if (!isSafeModeEnabled() && (readConfig().cdpNetwork === true || readConfig().cdpIntercept === true)) {
+    if (!isSafeModeEnabled()) {
       const type = wc.getType();
-      if (type === "window" || type === "webview" || type === "browserView") {
+      const isPage = type === "window" || type === "webview" || type === "browserView";
+      const cfg = readConfig();
+      if (isPage && (cfg.cdpNetwork === true || cfg.cdpIntercept === true)) {
         void getCdpNetworkObserver().observe(wc);
+      }
+      if (isPage && (cfg.cdpStreamTransform === true || cfg.cdpWsTransform === true || cfg.cdpRaceRequest === true)) {
+        void getMainWorldHost().attach(wc);
       }
     }
   } catch (e) {
@@ -760,6 +1124,30 @@ setupIPCBridge();
 if (!isSafeModeEnabled()) {
   loadMainProcessPlugins();
 }
+
+// Begin recording traffic if captureTraffic is already enabled.
+syncTrafficCapture();
+
+// Connect the remote (NATS) bus if it's already enabled in config.
+void syncRemote();
+
+// Diagnose: warn if plugins registered network features whose config gate is off
+// (otherwise they silently never fire). Deferred so async plugin start() can run.
+function warnConfigGates(): void {
+  const net = peekMainNetwork();
+  if (!net) return; // no plugin touched api.network
+  const cfg = readConfig();
+  if ((net.hasInterceptors() || net.hasResponseInterceptors()) && cfg.cdpIntercept !== true) {
+    log("warn", "plugin registered intercept/interceptResponse but cdpIntercept is OFF — enable: desktop-proxy config set cdpIntercept true");
+  }
+  if (net.transformRegistrations().length > 0 && cfg.cdpStreamTransform !== true) {
+    log("warn", "plugin registered transformStream but cdpStreamTransform is OFF — enable: desktop-proxy config set cdpStreamTransform true");
+  }
+  if (net.wsTransformRegistrations().length > 0 && cfg.cdpWsTransform !== true) {
+    log("warn", "plugin registered transformWebSocket but cdpWsTransform is OFF — enable: desktop-proxy config set cdpWsTransform true");
+  }
+}
+setTimeout(warnConfigGates, 3000).unref?.();
 
 // Start watchers: plugin files (hot reload) + config.json (live settings)
 startFSWatcher();

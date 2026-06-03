@@ -15,7 +15,7 @@
 
 import type { WebContents } from "electron";
 
-import type { NetworkRequest, NetworkResponse } from "@desktop-proxy/plugin-sdk";
+import type { NetworkRequest, NetworkResponse, WebSocketEvent } from "@desktop-proxy/plugin-sdk";
 
 import type { MainCDP } from "../cdp";
 import { toHeaderEntries, fromHeaderEntries, type NetDecision, type NetResponseDecision } from "./intercept";
@@ -30,13 +30,17 @@ export interface CdpNetworkDeps {
   /** When true, also enable the Fetch domain to allow modify/block/mock. */
   interceptEnabled: () => boolean;
   /** Resolve a paused request's decision (first intercept handler to act wins). */
-  dispatchIntercept: (req: NetworkRequest) => Promise<NetDecision>;
-  /** True if any response-rewrite handler is registered. */
-  hasResponseInterceptors: () => boolean;
+  dispatchIntercept: (req: NetworkRequest, wc: WebContents) => Promise<NetDecision>;
+  /** True if any response-rewrite handler is registered (main or this renderer). */
+  hasResponseInterceptors: (wc: WebContents) => boolean;
   /** True if a response-rewrite handler targets this url (worth buffering). */
-  responseInterceptMatches: (url: string) => boolean;
+  responseInterceptMatches: (url: string, wc: WebContents) => boolean;
   /** Resolve a real response's rewrite decision. */
-  dispatchInterceptResponse: (res: NetworkResponse, url: string) => Promise<NetResponseDecision>;
+  dispatchInterceptResponse: (res: NetworkResponse, url: string, wc: WebContents) => Promise<NetResponseDecision>;
+  /** Feed an observed WebSocket lifecycle/frame event. */
+  observeWebSocket: (evt: WebSocketEvent) => void;
+  /** True if any plugin is observing WebSockets (skip building events otherwise). */
+  hasWebSocketHandlers: () => boolean;
 }
 
 const FETCH_DECISION_TIMEOUT_MS = 3000;
@@ -103,6 +107,20 @@ export function createCdpNetworkObserver(hub: MainCDP, deps: CdpNetworkDeps): Cd
     });
   }
 
+  function emitWsFrame(type: "sent" | "received", p: Record<string, unknown>): void {
+    const r = p.response as { opcode?: number; payloadData?: string } | undefined;
+    const opcode = r?.opcode;
+    deps.observeWebSocket({
+      id: String(p.requestId),
+      type,
+      data: typeof r?.payloadData === "string" ? r.payloadData : undefined,
+      opcode,
+      binary: typeof opcode === "number" ? opcode !== 1 : undefined,
+      source: "renderer-cdp",
+      timestamp: Date.now(),
+    });
+  }
+
   async function observe(wc: WebContents): Promise<void> {
     if (observed.has(wc.id)) return;
     observed.add(wc.id);
@@ -161,6 +179,30 @@ export function createCdpNetworkObserver(hub: MainCDP, deps: CdpNetworkDeps): Cd
           pending.delete(String(p.requestId));
         } else if (method === "Fetch.requestPaused") {
           void handleFetchPaused(wc, p);
+        } else if (deps.hasWebSocketHandlers() && method.startsWith("Network.webSocket")) {
+          if (method === "Network.webSocketCreated") {
+            deps.observeWebSocket({
+              id: String(p.requestId),
+              type: "open",
+              url: String(p.url ?? ""),
+              source: "renderer-cdp",
+              timestamp: Date.now(),
+            });
+          } else if (method === "Network.webSocketFrameSent") {
+            emitWsFrame("sent", p);
+          } else if (method === "Network.webSocketFrameReceived") {
+            emitWsFrame("received", p);
+          } else if (method === "Network.webSocketClosed") {
+            deps.observeWebSocket({ id: String(p.requestId), type: "close", source: "renderer-cdp", timestamp: Date.now() });
+          } else if (method === "Network.webSocketFrameError") {
+            deps.observeWebSocket({
+              id: String(p.requestId),
+              type: "error",
+              error: String(p.errorMessage ?? ""),
+              source: "renderer-cdp",
+              timestamp: Date.now(),
+            });
+          }
         }
       } catch (e) {
         deps.log("warn", "cdp-network: event handling error:", String(e));
@@ -210,7 +252,7 @@ export function createCdpNetworkObserver(hub: MainCDP, deps: CdpNetworkDeps): Cd
 
     let decision: NetDecision = { action: "continue" };
     try {
-      decision = await withTimeout(deps.dispatchIntercept(req), FETCH_DECISION_TIMEOUT_MS, { action: "continue" });
+      decision = await withTimeout(deps.dispatchIntercept(req, wc), FETCH_DECISION_TIMEOUT_MS, { action: "continue" });
     } catch (e) {
       deps.log("error", "cdp-network: intercept dispatch failed:", String(e));
     }
@@ -247,7 +289,7 @@ export function createCdpNetworkObserver(hub: MainCDP, deps: CdpNetworkDeps): Cd
     p: Record<string, unknown>,
   ): Promise<void> {
     // Fast path: nobody wants to rewrite this URL — keep streaming.
-    if (!deps.hasResponseInterceptors() || !deps.responseInterceptMatches(url)) {
+    if (!deps.hasResponseInterceptors(wc) || !deps.responseInterceptMatches(url, wc)) {
       await hub.send(wc, "Fetch.continueResponse", { requestId }).catch(() => undefined);
       return;
     }
@@ -294,7 +336,7 @@ export function createCdpNetworkObserver(hub: MainCDP, deps: CdpNetworkDeps): Cd
     let decision: NetResponseDecision = { action: "continue" };
     try {
       decision = await withTimeout(
-        deps.dispatchInterceptResponse(networkResponse, url),
+        deps.dispatchInterceptResponse(networkResponse, url, wc),
         FETCH_DECISION_TIMEOUT_MS,
         { action: "continue" },
       );

@@ -6,9 +6,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-import { locateApp, type CodexInstall } from "../platform.js";
+import { locateApp } from "../platform.js";
 import { readHeaderHash } from "../asar.js";
 import { readFuses } from "../fuses.js";
+import { getBackend, DEFAULT_BACKEND, isBackendName } from "../backends/index.js";
 
 export function status(): void {
   const userRoot = join(homedir(), ".desktop-proxy");
@@ -16,12 +17,16 @@ export function status(): void {
 
   console.log("\ndesktop-proxy status\n");
 
+  let backendName = DEFAULT_BACKEND;
+
   // Show state file
   if (existsSync(statePath)) {
     try {
       const state = JSON.parse(readFileSync(statePath, "utf8"));
+      if (typeof state.backend === "string" && isBackendName(state.backend)) backendName = state.backend;
       console.log(`  Version:      ${state.version || "unknown"}`);
       console.log(`  Installed:    ${state.installedAt || "unknown"}`);
+      console.log(`  Backend:      ${state.backend || backendName}`);
       console.log(`  App:          ${state.appRoot || "unknown"}`);
       console.log(`  Codex Ver:    ${state.codexVersion || "unknown"}`);
       console.log(`  Channel:      ${state.codexChannel || "unknown"}`);
@@ -40,12 +45,8 @@ export function status(): void {
   try {
     const codex = locateApp();
 
-    // Check if asar is patched
-    try {
-      const pkg = JSON.parse(
-        readFileSync(join(homedir(), ".desktop-proxy", "backup", "app.asar"), "utf8").length + ""
-      );
-    } catch {}
+    const injected = getBackend(backendName).isApplied(codex);
+    console.log(`  Injected:       ${injected ? "yes" : "no"}`);
 
     const hash = readHeaderHash(codex.asarPath);
     console.log(`  app.asar hash:  ${hash.headerHash.slice(0, 16)}...`);

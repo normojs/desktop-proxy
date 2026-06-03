@@ -1,0 +1,35 @@
+import { describe, it, expect } from "vitest";
+
+import { extractUsage } from "../src/net/traffic-cost";
+
+describe("extractUsage", () => {
+  it("parses OpenAI usage and estimates cost", () => {
+    const u = extractUsage("gpt-4o", '{"usage":{"prompt_tokens":1000,"completion_tokens":500,"total_tokens":1500}}');
+    expect(u).toMatchObject({ promptTokens: 1000, completionTokens: 500, totalTokens: 1500 });
+    // 1000/1e6*2.5 + 500/1e6*10 = 0.0025 + 0.005 = 0.0075
+    expect(u!.costUsd).toBeCloseTo(0.0075, 6);
+  });
+
+  it("parses Anthropic usage shape", () => {
+    const u = extractUsage("claude-3-5-sonnet-latest", '{"usage":{"input_tokens":200,"output_tokens":100}}');
+    expect(u).toMatchObject({ promptTokens: 200, completionTokens: 100, totalTokens: 300 });
+    expect(u!.costUsd).toBeCloseTo(200 / 1e6 * 3 + 100 / 1e6 * 15, 6);
+  });
+
+  it("parses Google usageMetadata shape", () => {
+    const u = extractUsage("gemini-1.5-flash", '{"usageMetadata":{"promptTokenCount":50,"candidatesTokenCount":20,"totalTokenCount":70}}');
+    expect(u).toMatchObject({ promptTokens: 50, completionTokens: 20, totalTokens: 70 });
+  });
+
+  it("returns tokens without cost for an unknown model", () => {
+    const u = extractUsage("some-unknown-llm", '{"usage":{"prompt_tokens":10,"completion_tokens":5}}');
+    expect(u).toMatchObject({ promptTokens: 10, completionTokens: 5 });
+    expect(u!.costUsd).toBeUndefined();
+  });
+
+  it("returns null when there is no usage", () => {
+    expect(extractUsage("gpt-4o", '{"choices":[]}')).toBeNull();
+    expect(extractUsage("gpt-4o", "not json")).toBeNull();
+    expect(extractUsage("gpt-4o", null)).toBeNull();
+  });
+});

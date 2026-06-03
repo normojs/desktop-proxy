@@ -21,8 +21,8 @@ import { homedir } from "node:os";
 import { validateManifest, compareVersions } from "@desktop-proxy/plugin-sdk";
 
 import { locateApp } from "../platform.js";
-import { readFileInAsar } from "../asar.js";
 import { readFuses, FuseV1 } from "../fuses.js";
+import { getBackend, DEFAULT_BACKEND, isBackendName, type BackendName } from "../backends/index.js";
 
 const USER_ROOT = join(homedir(), ".desktop-proxy");
 const CONFIG_FILE = join(USER_ROOT, "config.json");
@@ -189,7 +189,10 @@ export async function pluginCheckUpdates(json = false): Promise<void> {
 
 // ── config ───────────────────────────────────────────────────────────────────
 
-const BOOL_KEYS = new Set(["autoUpdate", "safeMode", "stealth", "enforcePermissions", "cdpNetwork", "cdpIntercept"]);
+const BOOL_KEYS = new Set([
+  "autoUpdate", "safeMode", "stealth", "enforcePermissions",
+  "cdpNetwork", "cdpIntercept", "cdpStreamTransform", "cdpWsTransform", "cdpRaceRequest", "captureTraffic", "persistTraffic",
+]);
 const STRING_KEYS = new Set(["logLevel"]);
 const NUMBER_KEYS = new Set(["maxResponseBodyBytes"]);
 const SETTABLE = [...BOOL_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
@@ -261,9 +264,15 @@ export function doctor(json = false): void {
     detail: existsSync(RUNTIME_MAIN) ? RUNTIME_MAIN : `missing (${RUNTIME_MAIN}) — run install`,
   });
 
+  let backendName: BackendName = DEFAULT_BACKEND;
   try {
     const state = JSON.parse(readFileSync(STATE_FILE, "utf8"));
-    checks.push({ name: "state", status: "ok", detail: `installed ${state.installedAt ?? "?"}` });
+    if (typeof state.backend === "string" && isBackendName(state.backend)) backendName = state.backend;
+    checks.push({
+      name: "state",
+      status: "ok",
+      detail: `installed ${state.installedAt ?? "?"} (backend: ${state.backend ?? backendName})`,
+    });
   } catch {
     checks.push({ name: "state", status: "warn", detail: "not installed (no state.json)" });
   }
@@ -273,15 +282,14 @@ export function doctor(json = false): void {
     checks.push({ name: "app", status: "ok", detail: `${app.appName} @ ${app.appRoot}` });
 
     try {
-      const pkg = JSON.parse(readFileInAsar(app.asarPath, "package.json").toString("utf8"));
-      const patched = Boolean(pkg.__desktop_proxy);
+      const injected = getBackend(backendName).isApplied(app);
       checks.push({
-        name: "patched",
-        status: patched ? "ok" : "fail",
-        detail: patched ? `main=${pkg.main}` : "app.asar is NOT patched — run install/repair",
+        name: "injected",
+        status: injected ? "ok" : "fail",
+        detail: injected ? `via ${backendName} backend` : `app is NOT injected (${backendName}) — run install/repair`,
       });
     } catch (e) {
-      checks.push({ name: "patched", status: "warn", detail: `could not read app.asar: ${String(e)}` });
+      checks.push({ name: "injected", status: "warn", detail: `could not check injection: ${String(e)}` });
     }
 
     if (existsSync(app.electronBinary)) {
@@ -309,6 +317,16 @@ export function doctor(json = false): void {
 
   const safeMode = existsSync(SAFE_MODE_FILE) || readConfig().safeMode === true;
   checks.push({ name: "safe-mode", status: safeMode ? "warn" : "ok", detail: safeMode ? "ON (plugins disabled)" : "off" });
+
+  // Network capability gates: plugins using these APIs need the matching config on.
+  const cfg = readConfig() as Record<string, unknown>;
+  const gates = ["cdpNetwork", "cdpIntercept", "cdpStreamTransform", "cdpWsTransform", "cdpRaceRequest", "captureTraffic", "persistTraffic"];
+  const enabledGates = gates.filter((k) => cfg[k] === true);
+  checks.push({
+    name: "capabilities",
+    status: "ok",
+    detail: enabledGates.length ? `enabled: ${enabledGates.join(", ")}` : "none enabled (intercept/transform/capture off)",
+  });
 
   if (json) {
     const ok = checks.every((c) => c.status !== "fail");

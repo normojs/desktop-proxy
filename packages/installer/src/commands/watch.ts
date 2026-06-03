@@ -1,119 +1,178 @@
 /**
- * Auto-repair watcher (macOS).
+ * Auto-repair watcher — re-applies the patch when the target app updates.
  *
- * Target apps usually wipe our patch when they auto-update. We install a launchd
- * LaunchAgent with WatchPaths on the app's Resources directory; whenever
- * `app.asar` changes, launchd runs `desktop-proxy repair --if-needed`, which
- * re-applies the patch only if it is missing (so it does not loop on our own
- * re-patch).
+ * Cross-platform: launchd (macOS, real-time), systemd user .path unit (Linux,
+ * real-time), Task Scheduler logon task (Windows, applies at next logon). The
+ * file/argument generation lives in ../watcher.ts (unit tested); this drives the
+ * platform tool (launchctl / systemctl / schtasks).
  */
 
-import { existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, unlinkSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { homedir, platform } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import { locateApp } from "../platform.js";
+import {
+  buildLaunchdPlist,
+  buildSystemdService,
+  buildSystemdPath,
+  buildWindowsTaskCreateArgs,
+  launchdPlistPath,
+  systemdUnitPaths,
+  UNIT_NAME,
+  MAC_LABEL,
+  type WatcherSpec,
+} from "../watcher.js";
 
-const LABEL = "com.desktop-proxy.watcher";
 const here = dirname(fileURLToPath(import.meta.url));
 
-function plistPath(): string {
-  return join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
+function buildSpec(appRoot: string): WatcherSpec {
+  const cliJs = resolve(here, "..", "cli.js");
+  const logDir = join(homedir(), ".desktop-proxy", "log");
+  mkdirSync(logDir, { recursive: true });
+  const codex = locateApp(appRoot);
+  return {
+    repairArgs: [process.execPath, cliJs, "repair", "--if-needed", "--app", codex.appRoot, "--quiet"],
+    asarPath: codex.asarPath,
+    watchDir: codex.resourcesDir,
+    logFile: join(logDir, "watcher.log"),
+  };
 }
 
-function xmlEscape(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function requireMac(json: boolean): boolean {
-  if (platform() === "darwin") return true;
-  const msg = "the auto-repair watcher is macOS-only (uses launchd)";
-  if (json) console.log(JSON.stringify({ error: msg }));
-  else console.error(`\n  ${msg}\n`);
-  return false;
+function out(json: boolean, payload: Record<string, unknown>, human: () => void): void {
+  if (json) console.log(JSON.stringify(payload));
+  else human();
 }
 
 export function installWatcher(opts: { app?: string; json?: boolean } = {}): void {
   const json = opts.json ?? false;
-  if (!requireMac(json)) return;
+  const plat = platform();
 
-  const codex = locateApp(opts.app);
-  const cliJs = resolve(here, "..", "cli.js");
-  const logDir = join(homedir(), ".desktop-proxy", "log");
-  mkdirSync(logDir, { recursive: true });
-  const watchDir = join(codex.appRoot, "Contents", "Resources");
-  const logFile = join(logDir, "watcher.log");
-  const plist = plistPath();
-  mkdirSync(dirname(plist), { recursive: true });
-
-  const args = [process.execPath, cliJs, "repair", "--if-needed", "--app", codex.appRoot, "--quiet"];
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>${LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-${args.map((a) => `    <string>${xmlEscape(a)}</string>`).join("\n")}
-  </array>
-  <key>WatchPaths</key>
-  <array><string>${xmlEscape(watchDir)}</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>StandardErrorPath</key><string>${xmlEscape(logFile)}</string>
-  <key>StandardOutPath</key><string>${xmlEscape(logFile)}</string>
-</dict>
-</plist>
-`;
-  writeFileSync(plist, xml);
-
-  spawnSync("launchctl", ["unload", plist], { stdio: "ignore" });
-  const loaded = spawnSync("launchctl", ["load", "-w", plist], { encoding: "utf8" });
-  if (loaded.status !== 0) {
-    const err = `launchctl load failed: ${(loaded.stderr || loaded.stdout || "").trim()}`;
-    if (json) console.log(JSON.stringify({ error: err }));
-    else console.error(`\n  ${err}\n`);
+  let spec: WatcherSpec;
+  try {
+    spec = buildSpec(opts.app ?? "");
+  } catch (e) {
+    out(json, { error: (e as Error).message }, () => console.error(`\n  ${(e as Error).message}\n`));
     process.exit(1);
+    return;
   }
 
-  if (json) {
-    console.log(JSON.stringify({ ok: true, label: LABEL, plist, watch: watchDir }));
-  } else {
-    console.log(`\n  Auto-repair watcher installed.`);
-    console.log(`  Watches: ${watchDir}`);
-    console.log(`  Re-applies the patch automatically when ${codex.appName} updates.\n`);
+  if (plat === "darwin") {
+    const plist = launchdPlistPath();
+    mkdirSync(dirname(plist), { recursive: true });
+    writeFileSync(plist, buildLaunchdPlist(spec));
+    spawnSync("launchctl", ["unload", plist], { stdio: "ignore" });
+    const loaded = spawnSync("launchctl", ["load", "-w", plist], { encoding: "utf8" });
+    if (loaded.status !== 0) {
+      const err = `launchctl load failed: ${(loaded.stderr || loaded.stdout || "").trim()}`;
+      out(json, { error: err }, () => console.error(`\n  ${err}\n`));
+      process.exit(1);
+      return;
+    }
+    out(json, { ok: true, label: MAC_LABEL, plist, watch: spec.watchDir }, () => {
+      console.log(`\n  Auto-repair watcher installed (launchd).`);
+      console.log(`  Watches: ${spec.watchDir}\n`);
+    });
+    return;
   }
+
+  if (plat === "linux") {
+    const units = systemdUnitPaths();
+    mkdirSync(dirname(units.service), { recursive: true });
+    writeFileSync(units.service, buildSystemdService(spec));
+    writeFileSync(units.path, buildSystemdPath(spec));
+    spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+    const enabled = spawnSync("systemctl", ["--user", "enable", "--now", `${UNIT_NAME}.path`], { encoding: "utf8" });
+    if (enabled.status !== 0) {
+      const err = `systemctl enable failed: ${(enabled.stderr || enabled.stdout || "").trim()}`;
+      out(json, { error: err, units }, () => {
+        console.error(`\n  ${err}`);
+        console.error(`  Units written to ${units.service} / ${units.path}; enable manually if needed.\n`);
+      });
+      process.exit(1);
+      return;
+    }
+    out(json, { ok: true, units, watch: spec.asarPath }, () => {
+      console.log(`\n  Auto-repair watcher installed (systemd user .path).`);
+      console.log(`  Watches: ${spec.asarPath}\n`);
+    });
+    return;
+  }
+
+  if (plat === "win32") {
+    const created = spawnSync("schtasks", buildWindowsTaskCreateArgs(spec), { encoding: "utf8" });
+    if (created.status !== 0) {
+      const err = `schtasks create failed: ${(created.stderr || created.stdout || "").trim()}`;
+      out(json, { error: err }, () => console.error(`\n  ${err}\n`));
+      process.exit(1);
+      return;
+    }
+    out(json, { ok: true, task: UNIT_NAME }, () => {
+      console.log(`\n  Auto-repair task installed (Task Scheduler, on logon).`);
+      console.log(`  Note: re-applies at next logon (no real-time file trigger on Windows).\n`);
+    });
+    return;
+  }
+
+  out(json, { error: `unsupported platform: ${plat}` }, () => console.error(`\n  unsupported platform: ${plat}\n`));
+  process.exit(1);
 }
 
-export function uninstallWatcher(opts: { json?: boolean } = {}): void {
+export function uninstallWatcher(opts: { json?: boolean; quiet?: boolean } = {}): void {
   const json = opts.json ?? false;
-  if (!requireMac(json)) return;
-  const plist = plistPath();
-  spawnSync("launchctl", ["unload", "-w", plist], { stdio: "ignore" });
-  try {
-    unlinkSync(plist);
-  } catch {
-    // already gone
+  const plat = platform();
+
+  if (plat === "darwin") {
+    const plist = launchdPlistPath();
+    spawnSync("launchctl", ["unload", "-w", plist], { stdio: "ignore" });
+    try { unlinkSync(plist); } catch { /* gone */ }
+  } else if (plat === "linux") {
+    spawnSync("systemctl", ["--user", "disable", "--now", `${UNIT_NAME}.path`], { stdio: "ignore" });
+    const units = systemdUnitPaths();
+    try { rmSync(units.service, { force: true }); } catch { /* gone */ }
+    try { rmSync(units.path, { force: true }); } catch { /* gone */ }
+    spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+  } else if (plat === "win32") {
+    spawnSync("schtasks", ["/Delete", "/TN", UNIT_NAME, "/F"], { stdio: "ignore" });
   }
+
   if (json) console.log(JSON.stringify({ ok: true }));
-  else console.log(`\n  Auto-repair watcher removed.\n`);
+  else if (!opts.quiet) console.log(`\n  Auto-repair watcher removed.\n`);
 }
 
 export function watcherStatus(opts: { json?: boolean } = {}): void {
   const json = opts.json ?? false;
-  const plist = plistPath();
-  const installed = existsSync(plist);
+  const plat = platform();
+  let installed = false;
   let loaded = false;
-  if (platform() === "darwin") {
-    const result = spawnSync("launchctl", ["list"], { encoding: "utf8" });
-    loaded = (result.stdout ?? "").includes(LABEL);
+  let detail = "";
+
+  if (plat === "darwin") {
+    const plist = launchdPlistPath();
+    installed = existsSync(plist);
+    loaded = (spawnSync("launchctl", ["list"], { encoding: "utf8" }).stdout ?? "").includes(MAC_LABEL);
+    detail = plist;
+  } else if (plat === "linux") {
+    const units = systemdUnitPaths();
+    installed = existsSync(units.path);
+    loaded = (spawnSync("systemctl", ["--user", "is-active", `${UNIT_NAME}.path`], { encoding: "utf8" }).stdout ?? "")
+      .trim()
+      .startsWith("active");
+    detail = units.path;
+  } else if (plat === "win32") {
+    const q = spawnSync("schtasks", ["/Query", "/TN", UNIT_NAME], { encoding: "utf8" });
+    installed = q.status === 0;
+    loaded = installed;
+    detail = UNIT_NAME;
   }
+
   if (json) {
-    console.log(JSON.stringify({ installed, loaded, plist }));
+    console.log(JSON.stringify({ installed, loaded, detail, platform: plat }));
     return;
   }
-  const state = installed ? (loaded ? "installed (loaded)" : "installed (not loaded)") : "not installed";
+  const state = installed ? (loaded ? "installed (active)" : "installed (inactive)") : "not installed";
   console.log(`\n  Auto-repair watcher: ${state}`);
-  console.log(`  Plist: ${plist}\n`);
+  console.log(`  ${detail}\n`);
 }

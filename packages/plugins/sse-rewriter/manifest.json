@@ -1,0 +1,12 @@
+{
+  "id": "com.desktop-proxy.sse-rewriter",
+  "name": "SSE Stream Rewriter",
+  "version": "0.1.0",
+  "description": "Example main-scope plugin: rewrites streaming SSE token responses (OpenAI/Anthropic-style) live via api.network.transformStream, and captures the streamed text. Requires config cdpStreamTransform=true.",
+  "author": "desktop-proxy",
+  "main": "index.js",
+  "scope": "main",
+  "permissions": ["network"],
+  "minDesktopProxyVersion": "0.1.0",
+  "iconUrl": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23FF9F0A' stroke-width='2'%3E%3Cpath d='M4 6h16M4 12h10M4 18h7'/%3E%3Cpath d='M16 16l3 3 3-3'/%3E%3C/svg%3E"
+}

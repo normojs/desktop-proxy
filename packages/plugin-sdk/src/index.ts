@@ -5,6 +5,10 @@
  * running in the desktop-proxy injection framework.
  */
 
+// Framework-internal message bus (transport-agnostic protocol; used by the
+// runtime/preload and the remote NATS transport).
+export * from "./bus";
+
 // ── Plugin Manifest ──────────────────────────────────────────────────────────
 
 export interface PluginManifest {
@@ -105,6 +109,17 @@ export interface PluginIPC {
   invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>;
 }
 
+/**
+ * Pub/sub event bus that spans the main process, all renderers, and plugins —
+ * routed through the main process. Use it for cross-plugin / cross-process
+ * coordination without hand-rolling IPC channel names. The framework also
+ * publishes well-known topics like `config:changed` and `plugins:changed`.
+ */
+export interface PluginEvents {
+  on(topic: string, handler: (data: unknown) => void): UnsubscribeFn;
+  emit(topic: string, data?: unknown): void;
+}
+
 // ── Network Interception (primary use case) ──────────────────────────────────
 
 /** Where an intercepted request/response was observed. */
@@ -197,6 +212,133 @@ export type NetworkResponseInterceptHandler = (
   control: NetworkResponseControl,
 ) => void | Promise<void>;
 
+export interface StreamTransformContext {
+  /** Send observation data back to the plugin (async; for telemetry/capture). */
+  emit(data: unknown): void;
+}
+
+/**
+ * Transform a streaming response chunk-by-chunk. Runs IN THE PAGE (main world),
+ * so it must be SELF-CONTAINED — no closures over plugin scope, no imports.
+ * Return a string to emit, `null` to drop the chunk, or `undefined` to pass it
+ * through unchanged.
+ */
+export type StreamTransformFn = (chunk: string, ctx: StreamTransformContext) => string | null | undefined | void;
+
+export interface StreamTransformOptions {
+  /** "chunk" = per decoded chunk; "sse" = buffered to `\n\n` event boundaries. */
+  mode?: "chunk" | "sse";
+  /** Receives data passed to `ctx.emit(...)` from the page (runs in the plugin). */
+  onEmit?: (data: unknown) => void;
+}
+
+// ── WebSocket ────────────────────────────────────────────────────────────────
+
+/** A WebSocket lifecycle/frame event observed via CDP (passive). */
+export interface WebSocketEvent {
+  /** CDP requestId identifying the socket (stable for its lifetime). */
+  id: string;
+  type: "open" | "sent" | "received" | "close" | "error";
+  /** Present on "open". */
+  url?: string;
+  /** Frame payload: text for opcode 1, otherwise base64 binary. Present on sent/received. */
+  data?: string;
+  /** WebSocket opcode: 1 text, 2 binary, 8 close, 9 ping, 10 pong. */
+  opcode?: number;
+  /** True when the frame is binary (opcode !== 1). */
+  binary?: boolean;
+  /** Present on "error". */
+  error?: string;
+  source?: NetworkSource;
+  timestamp: number;
+}
+
+export type WebSocketHandler = (evt: WebSocketEvent) => void;
+
+export interface WsTransformContext {
+  /** The socket URL. */
+  url: string;
+  /** "send" = outbound (page → server); "receive" = inbound (server → page). */
+  direction: "send" | "receive";
+  /** Send observation data back to the plugin (runs in the plugin). */
+  emit(data: unknown): void;
+}
+
+/**
+ * Transform a WebSocket text frame in either direction. Runs IN THE PAGE (main
+ * world), so it must be SELF-CONTAINED. Inspect `ctx.direction` to tell outbound
+ * ("send") from inbound ("receive"). Return a string to replace the frame,
+ * `null` to drop it, or `undefined` to pass it through unchanged. Binary frames
+ * (ArrayBuffer/Blob) are passed through untouched.
+ */
+export type WsTransformFn = (data: string, ctx: WsTransformContext) => string | null | undefined | void;
+
+export interface WsTransformOptions {
+  /** Receives data passed to `ctx.emit(...)` from the page (runs in the plugin). */
+  onEmit?: (data: unknown) => void;
+}
+
+// ── Request racing / failover ────────────────────────────────────────────────
+
+/** A variant request derived from the original (e.g. a different key/endpoint/model). */
+export interface RaceVariant {
+  url?: string;
+  method?: string;
+  /** Headers to merge over the original (e.g. a different Authorization). */
+  headers?: Record<string, string>;
+  /** Replacement body (defaults to the original request body). */
+  body?: string | null;
+}
+
+/** The original request, passed to `variants(...)`. */
+export interface RaceRequestContext {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: string | null;
+}
+
+export interface RaceAttempt {
+  index: number;
+  status: number | null;
+  ok: boolean;
+  error?: string;
+  ms: number;
+}
+
+export interface RaceResult {
+  /** Index of the accepted variant, or null if none were accepted. */
+  winnerIndex: number | null;
+  attempts: RaceAttempt[];
+  totalMs: number;
+  /** True if the total timeout fired. */
+  timedOut?: boolean;
+}
+
+export interface RaceRequestOptions {
+  /** Produce the variants to try for a matched request. */
+  variants: (req: RaceRequestContext) => RaceVariant[];
+  /**
+   * "race" = fire variants concurrently (up to `concurrency`) and take the first
+   * accepted; "fallback" = try sequentially, moving on only when one is rejected.
+   * Default "race".
+   */
+  mode?: "race" | "fallback";
+  /** Max concurrent in-flight variants in "race" mode (default: all). */
+  concurrency?: number;
+  /** Abort an individual variant after this many ms (0 = no limit). */
+  perRequestTimeoutMs?: number;
+  /** Abort the whole race after this many ms (0 = no limit). */
+  totalTimeoutMs?: number;
+  /**
+   * Decide whether a variant's response is acceptable, from status + headers
+   * only (so the body keeps streaming). Default: 2xx.
+   */
+  accept?: (status: number, headers: Record<string, string>) => boolean;
+  /** Telemetry callback with the race outcome. */
+  onResult?: (result: RaceResult) => void;
+}
+
 export interface PluginNetwork {
   onRequest(handler: NetworkRequestHandler): UnsubscribeFn;
   onResponse(handler: NetworkResponseHandler): UnsubscribeFn;
@@ -211,6 +353,39 @@ export interface PluginNetwork {
    * Requires `cdpIntercept`.
    */
   interceptResponse(handler: NetworkResponseInterceptHandler, filter?: NetworkInterceptFilter): UnsubscribeFn;
+  /**
+   * Transform a streaming response (e.g. SSE token streams) chunk-by-chunk while
+   * preserving streaming. The transform runs in the page's main world. Requires
+   * `cdpStreamTransform`.
+   */
+  transformStream(
+    filter: NetworkInterceptFilter,
+    transform: StreamTransformFn,
+    opts?: StreamTransformOptions,
+  ): UnsubscribeFn;
+  /**
+   * Observe WebSocket lifecycle and frames (open/sent/received/close/error) for
+   * renderer sockets, captured passively via CDP. Requires `cdpNetwork`.
+   */
+  onWebSocket(handler: WebSocketHandler): UnsubscribeFn;
+  /**
+   * Rewrite WebSocket text frames in both directions (outbound before send,
+   * inbound before the page sees them) — branch on `ctx.direction`. The transform
+   * runs in the page's main world. Requires `cdpWsTransform`.
+   */
+  transformWebSocket(
+    filter: NetworkInterceptFilter,
+    transform: WsTransformFn,
+    opts?: WsTransformOptions,
+  ): UnsubscribeFn;
+  /**
+   * Race / fail over a matched request across several variants (e.g. multiple
+   * API keys, endpoints, or models) and return the first ACCEPTED response —
+   * streaming-safe (acceptance is decided from status + headers, the winner's
+   * body streams through, losers are aborted). Main-scope; currently applies to
+   * main-process `fetch` (undici) requests.
+   */
+  raceRequest(filter: NetworkInterceptFilter, opts: RaceRequestOptions): UnsubscribeFn;
 }
 
 // ── Sandboxed Filesystem ─────────────────────────────────────────────────────
@@ -436,6 +611,7 @@ export interface PluginAPI {
   settings: PluginSettings;
   react: ReactAPI;
   ipc: PluginIPC;
+  events: PluginEvents;
   network: PluginNetwork;
   fs: PluginFS;
   cdp: PluginCDP;

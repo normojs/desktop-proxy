@@ -19,6 +19,7 @@ import { installNetworkInterceptor, setMaxResponseBodyBytes } from "./network-in
 import { startPluginHost, teardownPluginHost, setSettingsCallbacks, setLogLevel, setEnforcePermissions } from "./plugin-host";
 import { installSettingsOverlay, type SettingsOverlayHandle } from "./settings-overlay";
 import { registerManagementPage } from "./management-page";
+import { registerTrafficPage } from "./traffic-page";
 
 // ── Electron IPC ─────────────────────────────────────────────────────────────
 // In a sandboxed preload context, we can still require("electron") to get ipcRenderer.
@@ -118,6 +119,7 @@ function boot(): void {
       overlay = installSettingsOverlay({ stealth });
       setSettingsCallbacks(overlay.registerSection, overlay.registerPage);
       registerManagementPage(overlay, getIpcRenderer());
+      registerTrafficPage(overlay, getIpcRenderer());
       fileLog("settings overlay installed");
     }
   } catch (e) {
@@ -153,8 +155,11 @@ getIpcRenderer().on(ch("plugins-changed"), () => {
       fileLog("hot-reloading plugins");
       await teardownPluginHost();
       overlay?.clearAll();
-      // Re-add the framework page that clearAll() removed alongside plugin pages.
-      if (overlay) registerManagementPage(overlay, getIpcRenderer());
+      // Re-add the framework pages that clearAll() removed alongside plugin pages.
+      if (overlay) {
+        registerManagementPage(overlay, getIpcRenderer());
+        registerTrafficPage(overlay, getIpcRenderer());
+      }
       await startPluginHost();
       fileLog("hot-reload complete");
     } catch (e) {

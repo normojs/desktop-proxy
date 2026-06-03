@@ -10,6 +10,8 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { platform } from "node:os";
 
+import { appResourcesDir, appAsarPath, appMetaPath, electronBinaryCandidates } from "./layout.js";
+
 export interface CodexInstall {
   platform: string;
   appName: string;
@@ -23,35 +25,38 @@ export interface CodexInstall {
   bundleId: string | null;
 }
 
+const HOME = process.env.HOME || process.env.USERPROFILE || "~";
+const LOCALAPPDATA = process.env.LOCALAPPDATA || "";
+const PROGRAMFILES = process.env.PROGRAMFILES || "";
+
+/** Build best-effort search paths for an app across macOS/Windows/Linux. */
+function searchPathsFor(appName: string): string[] {
+  const lower = appName.toLowerCase();
+  return [
+    // macOS
+    `/Applications/${appName}.app`,
+    join(HOME, "Applications", `${appName}.app`),
+    // Windows (app root contains <App>.exe + resources/)
+    join(LOCALAPPDATA, "Programs", lower),
+    join(LOCALAPPDATA, "Programs", appName),
+    join(PROGRAMFILES, appName),
+    // Linux (.deb/tar installs; AppImage is read-only and unsupported)
+    `/opt/${appName}`,
+    `/opt/${lower}`,
+    `/usr/share/${lower}`,
+    `/usr/lib/${lower}`,
+    join(HOME, ".local", "share", lower),
+  ];
+}
+
 const KNOWN_APPS: Record<string, {
   name: string;
   bundleId: string;
   searchPaths: string[];
 }> = {
-  codex: {
-    name: "Codex",
-    bundleId: "com.openai.codex",
-    searchPaths: [
-      "/Applications/Codex.app",
-      join(process.env.HOME || "~", "Applications/Codex.app"),
-    ],
-  },
-  cursor: {
-    name: "Cursor",
-    bundleId: "com.cursor.app",
-    searchPaths: [
-      "/Applications/Cursor.app",
-      join(process.env.HOME || "~", "Applications/Cursor.app"),
-    ],
-  },
-  windsurf: {
-    name: "Windsurf",
-    bundleId: "com.codeium.windsurf",
-    searchPaths: [
-      "/Applications/Windsurf.app",
-      join(process.env.HOME || "~", "Applications/Windsurf.app"),
-    ],
-  },
+  codex: { name: "Codex", bundleId: "com.openai.codex", searchPaths: searchPathsFor("Codex") },
+  cursor: { name: "Cursor", bundleId: "com.cursor.app", searchPaths: searchPathsFor("Cursor") },
+  windsurf: { name: "Windsurf", bundleId: "com.codeium.windsurf", searchPaths: searchPathsFor("Windsurf") },
 };
 
 /**
@@ -105,48 +110,35 @@ function parseAppBundle(
   name?: string,
   bundleId?: string,
 ): CodexInstall {
-  const contentsDir = isMac ? join(appRoot, "Contents") : appRoot;
-  const resourcesDir = join(contentsDir, "Resources");
-  const macosDir = join(contentsDir, "MacOS");
-  const asarPath = join(resourcesDir, "app.asar");
-  const metaPath = isMac ? join(contentsDir, "Info.plist") : null;
+  const plat = isMac ? "darwin" : platform();
 
-  // Find the Electron Framework or executable
-  let electronBinary = "";
+  // Detect app name from the directory or use provided.
+  const appName = name || appRoot.split(/[\\/]/).pop()?.replace(/\.app$/, "") || "Unknown";
+
+  const resourcesDir = appResourcesDir(appRoot, plat);
+  const asarPath = appAsarPath(appRoot, plat);
+  const metaPath = appMetaPath(appRoot, plat);
+  const executable = isMac ? join(appRoot, "Contents", "MacOS") : appRoot;
+
+  // Pick the first existing Electron binary candidate (fall back to the first).
+  // On macOS the framework may be renamed (e.g. "Codex Framework"), so feed the
+  // actual .framework dir names in.
+  let frameworks: string[] = [];
   if (isMac) {
-    // Try Electron Framework first
-    const frameworkPath = join(
-      contentsDir,
-      "Frameworks",
-      "Electron Framework.framework",
-      "Versions",
-      "A",
-      "Electron Framework",
-    );
-    if (existsSync(frameworkPath)) {
-      electronBinary = frameworkPath;
-    } else {
-      // Fallback: try the main executable
-      try {
-        const entries = readdirSync(macosDir);
-        const execFile = entries.find((e: string) => !e.endsWith(".plist") && !e.startsWith("."));
-        if (execFile) electronBinary = join(macosDir, execFile);
-      } catch {
-        electronBinary = join(macosDir, "Electron");
-      }
+    try {
+      frameworks = readdirSync(join(appRoot, "Contents", "Frameworks"));
+    } catch {
+      // no Frameworks dir
     }
-  } else {
-    electronBinary = join(appRoot, `${name || "app"}.exe`);
   }
+  const candidates = electronBinaryCandidates(appRoot, plat, appName, frameworks);
+  const electronBinary = candidates.find((c) => existsSync(c)) ?? candidates[0];
 
   if (!existsSync(asarPath)) {
     throw new Error(`app.asar not found at ${asarPath}. Is this an Electron app?`);
   }
 
-  // Detect app name from the .app directory or use provided
-  const appName = name || appRoot.split("/").pop()?.replace(/\.app$/, "") || "Unknown";
-
-  // Detect channel (stable, canary, etc.) from bundle name
+  // Detect channel (stable, canary, etc.) from the bundle name.
   const channel = appRoot.toLowerCase().includes("canary")
     ? "canary"
     : appRoot.toLowerCase().includes("beta")
@@ -156,10 +148,10 @@ function parseAppBundle(
         : "stable";
 
   return {
-    platform: isMac ? "darwin" : platform(),
+    platform: plat,
     appName,
     appRoot,
-    executable: macosDir,
+    executable,
     resourcesDir,
     asarPath,
     metaPath,

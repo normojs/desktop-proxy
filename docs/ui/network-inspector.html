@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>desktop-proxy — Network Inspector</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+      html,
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      ::-webkit-scrollbar { width: 10px; height: 10px; }
+      ::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 8px; border: 2px solid #fff; }
+      .peer:checked + .dpt-track { background: #175cd3; }
+      .peer:checked + .dpt-track .dpt-knob { transform: translateX(14px); }
+      .peer-sm:checked + .dpt-track-sm { background: #175cd3; }
+      .peer-sm:checked + .dpt-track-sm .dpt-knob-sm { transform: translateX(12px); }
+    </style>
+  </head>
+  <body class="h-screen w-screen overflow-hidden bg-[#f9fafb] text-[#111]">
+    <div class="flex h-full flex-col">
+      <!-- Toolbar -->
+      <header class="flex items-center gap-3 border-b border-[#e5e7eb] bg-white px-4 py-2.5">
+        <div class="flex shrink-0 items-center gap-2">
+          <span class="grid h-6 w-6 place-items-center rounded-md bg-[#111] text-[11px] font-semibold tracking-tight text-white">dp</span>
+          <i data-lucide="chevron-right" class="h-3.5 w-3.5 text-[#cbd2da]"></i>
+          <h1 class="text-[15px] font-semibold tracking-tight">Network</h1>
+        </div>
+
+        <!-- DSL filter with inline chips -->
+        <div class="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-[#e5e7eb] bg-[#f9fafb] px-2 py-1 focus-within:border-[#175cd3] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#175cd3]/15">
+          <i data-lucide="filter" class="h-3.5 w-3.5 shrink-0 text-[#9aa3ad]"></i>
+          <span class="flex shrink-0 items-center gap-1 rounded bg-[#eff8ff] px-1.5 py-0.5 text-[11px] font-medium text-[#175cd3]">category:ai <i data-lucide="x" class="h-3 w-3 cursor-pointer opacity-60 hover:opacity-100"></i></span>
+          <span class="flex shrink-0 items-center gap-1 rounded bg-[#eff8ff] px-1.5 py-0.5 text-[11px] font-medium text-[#175cd3]">status:&gt;=400 <i data-lucide="x" class="h-3 w-3 cursor-pointer opacity-60 hover:opacity-100"></i></span>
+          <input
+            placeholder='filter… e.g. method:POST domain:openai larger-than:1k body:"quota" is:stream'
+            class="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-[#9aa3ad]"
+          />
+          <button class="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-[#6b7280] hover:bg-[#f3f4f6]"><i data-lucide="bookmark" class="h-3.5 w-3.5"></i> Saved <i data-lucide="chevron-down" class="h-3 w-3"></i></button>
+          <button class="grid h-5 w-5 shrink-0 place-items-center rounded text-[#9aa3ad] hover:bg-[#f3f4f6]" title="Filter syntax help"><i data-lucide="help-circle" class="h-3.5 w-3.5"></i></button>
+        </div>
+
+        <div class="flex shrink-0 items-center gap-2">
+          <label class="flex cursor-pointer items-center gap-2 text-[12px] text-[#374151]">
+            <input type="checkbox" checked class="peer sr-only" />
+            <span class="dpt-track relative h-[18px] w-[32px] rounded-full bg-[#cbd2da] transition-colors"><span class="dpt-knob absolute left-0.5 top-0.5 h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-transform"></span></span>
+            Capturing
+          </label>
+          <button class="flex h-8 items-center gap-1.5 rounded-md border border-[#d0d5dd] bg-white px-2.5 text-[12px] font-medium text-[#374151] hover:border-[#cbd2da] hover:bg-[#f9fafb]"><i data-lucide="download" class="h-3.5 w-3.5"></i> HAR</button>
+          <button class="grid h-8 w-8 place-items-center rounded-md border border-[#fecdca] bg-white text-[#b42318] hover:bg-[#fef3f2]" title="Clear"><i data-lucide="trash-2" class="h-3.5 w-3.5"></i></button>
+        </div>
+      </header>
+
+      <!-- Category + source + stats -->
+      <div class="flex items-center gap-2 overflow-x-auto border-b border-[#e5e7eb] bg-white px-4 py-2">
+        <button class="rounded-full bg-[#111] px-2.5 py-1 text-[11px] font-medium text-white">All <span class="ml-1 opacity-60">142</span></button>
+        <button class="flex items-center gap-1 rounded-full border border-[#175cd3] bg-[#eff8ff] px-2.5 py-1 text-[11px] font-medium text-[#175cd3]"><span class="h-1.5 w-1.5 rounded-full bg-[#7c3aed]"></span>AI <span class="opacity-70">18</span></button>
+        <button class="flex items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 py-1 text-[11px] font-medium text-[#374151] hover:bg-[#f9fafb]"><span class="h-1.5 w-1.5 rounded-full bg-[#0891b2]"></span>Auth <span class="text-[#9aa3ad]">6</span></button>
+        <button class="flex items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 py-1 text-[11px] font-medium text-[#374151] hover:bg-[#f9fafb]"><span class="h-1.5 w-1.5 rounded-full bg-[#b45309]"></span>Telemetry <span class="text-[#9aa3ad]">41</span></button>
+        <button class="flex items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 py-1 text-[11px] font-medium text-[#374151] hover:bg-[#f9fafb]"><span class="h-1.5 w-1.5 rounded-full bg-[#0d9488]"></span>API <span class="text-[#9aa3ad]">52</span></button>
+        <button class="flex items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 py-1 text-[11px] font-medium text-[#374151] hover:bg-[#f9fafb]"><span class="h-1.5 w-1.5 rounded-full bg-[#475569]"></span>Asset <span class="text-[#9aa3ad]">19</span></button>
+        <button class="flex items-center gap-1 rounded-full border border-[#e5e7eb] px-2.5 py-1 text-[11px] font-medium text-[#374151] hover:bg-[#f9fafb]"><span class="h-1.5 w-1.5 rounded-full bg-[#c026d3]"></span>WS <span class="text-[#9aa3ad]">4</span></button>
+        <span class="mx-1 h-4 w-px bg-[#e5e7eb]"></span>
+        <button class="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-[#374151] hover:bg-[#f3f4f6]"><i data-lucide="cpu" class="h-3.5 w-3.5 text-[#9aa3ad]"></i>Main</button>
+        <button class="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-[#374151] hover:bg-[#f3f4f6]"><i data-lucide="app-window" class="h-3.5 w-3.5 text-[#9aa3ad]"></i>Renderer</button>
+        <div class="ml-auto flex items-center gap-3 whitespace-nowrap text-[11px] text-[#9aa3ad]">
+          <span><span class="font-semibold text-[#374151]">2.4 MB</span> transferred</span>
+          <span class="text-[#b42318]"><span class="font-semibold">3</span> errors</span>
+          <span class="flex items-center gap-1"><i data-lucide="sparkles" class="h-3.5 w-3.5 text-[#7c3aed]"></i><span class="font-semibold text-[#374151]">18</span> AI · ~12.4k tok · <span class="font-semibold text-[#374151]">~$0.18</span></span>
+        </div>
+      </div>
+
+      <!-- Method + kind + options -->
+      <div class="flex items-center gap-2 overflow-x-auto border-b border-[#e5e7eb] bg-white px-4 py-1.5 text-[11px]">
+        <span class="font-medium text-[#9aa3ad]">Method</span>
+        <button class="rounded-md bg-[#111] px-2 py-0.5 font-medium text-white">All</button>
+        <button class="rounded-md px-2 py-0.5 font-medium text-[#374151] hover:bg-[#f3f4f6]">GET</button>
+        <button class="rounded-md px-2 py-0.5 font-medium text-[#374151] hover:bg-[#f3f4f6]">POST</button>
+        <button class="rounded-md px-2 py-0.5 font-medium text-[#374151] hover:bg-[#f3f4f6]">PUT</button>
+        <button class="rounded-md px-2 py-0.5 font-medium text-[#374151] hover:bg-[#f3f4f6]">DELETE</button>
+        <span class="mx-1 h-4 w-px bg-[#e5e7eb]"></span>
+        <span class="font-medium text-[#9aa3ad]">Kind</span>
+        <button class="rounded-md border border-[#e5e7eb] px-2 py-0.5 font-medium text-[#374151] hover:bg-[#f9fafb]">HTTP</button>
+        <button class="rounded-md border border-[#e5e7eb] px-2 py-0.5 font-medium text-[#374151] hover:bg-[#f9fafb]">HTTPS</button>
+        <button class="rounded-md border border-[#e5e7eb] px-2 py-0.5 font-medium text-[#374151] hover:bg-[#f9fafb]">WS</button>
+        <button class="flex items-center gap-1 rounded-md border border-[#e5e7eb] px-2 py-0.5 font-medium text-[#374151] hover:bg-[#f9fafb]"><i data-lucide="radio" class="h-3 w-3 text-[#7c3aed]"></i>SSE</button>
+        <span class="mx-1 h-4 w-px bg-[#e5e7eb]"></span>
+        <label class="flex cursor-pointer items-center gap-1.5 font-medium text-[#374151]">
+          <input type="checkbox" class="peer-sm sr-only" />
+          <span class="dpt-track-sm relative h-[16px] w-[28px] rounded-full bg-[#cbd2da] transition-colors"><span class="dpt-knob-sm absolute left-0.5 top-0.5 h-[12px] w-[12px] rounded-full bg-white shadow-sm transition-transform"></span></span>
+          Errors only
+        </label>
+        <label class="flex cursor-pointer items-center gap-1.5 font-medium text-[#374151]">
+          <input type="checkbox" class="peer-sm sr-only" />
+          <span class="dpt-track-sm relative h-[16px] w-[28px] rounded-full bg-[#cbd2da] transition-colors"><span class="dpt-knob-sm absolute left-0.5 top-0.5 h-[12px] w-[12px] rounded-full bg-white shadow-sm transition-transform"></span></span>
+          Group by domain
+        </label>
+        <button class="ml-1 flex items-center gap-1 rounded-md px-2 py-0.5 font-medium text-[#374151] hover:bg-[#f3f4f6]"><i data-lucide="arrow-down" class="h-3 w-3 text-[#9aa3ad]"></i>Follow</button>
+      </div>
+
+      <!-- Body: list + detail -->
+      <div class="flex min-h-0 flex-1">
+        <div class="min-w-0 flex-1 overflow-auto">
+          <table class="w-full border-collapse text-[12px]">
+            <thead class="sticky top-0 z-10 bg-[#f9fafb] text-left text-[#6b7280]">
+              <tr class="[&>th]:whitespace-nowrap [&>th]:px-3 [&>th]:py-2 [&>th]:font-medium">
+                <th class="w-16">Method</th>
+                <th class="w-14">Status</th>
+                <th class="w-24">Category</th>
+                <th>Request</th>
+                <th class="w-20 text-right">Size</th>
+                <th class="w-16 text-right">Time</th>
+                <th class="w-24">Source</th>
+              </tr>
+            </thead>
+            <tbody id="rows" class="[&>tr]:cursor-pointer [&>tr]:border-t [&>tr]:border-[#f1f3f5]"></tbody>
+          </table>
+        </div>
+
+        <aside class="flex w-[440px] shrink-0 flex-col border-l border-[#e5e7eb] bg-white">
+          <div class="flex items-center justify-between border-b border-[#e5e7eb] px-4 py-2.5">
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="rounded bg-[#7c3aed]/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#6d28d9]">AI</span>
+              <span class="truncate text-[13px] font-semibold tracking-tight">OpenAI · chat completion</span>
+            </div>
+            <button class="grid h-6 w-6 shrink-0 place-items-center rounded text-[#9aa3ad] hover:bg-[#f3f4f6] hover:text-[#374151]"><i data-lucide="x" class="h-4 w-4"></i></button>
+          </div>
+
+          <!-- Action toolbar -->
+          <div class="flex items-center gap-1.5 border-b border-[#e5e7eb] px-3 py-1.5">
+            <button class="flex items-center gap-1.5 rounded-md border border-[#d0d5dd] px-2 py-1 text-[11px] font-medium text-[#374151] hover:bg-[#f9fafb]"><i data-lucide="terminal" class="h-3.5 w-3.5"></i> Copy as cURL</button>
+            <button class="flex items-center gap-1.5 rounded-md border border-[#d0d5dd] px-2 py-1 text-[11px] font-medium text-[#374151] hover:bg-[#f9fafb]"><i data-lucide="repeat" class="h-3.5 w-3.5"></i> Replay</button>
+            <button class="flex items-center gap-1.5 rounded-md border border-[#d0d5dd] px-2 py-1 text-[11px] font-medium text-[#374151] hover:bg-[#f9fafb]"><i data-lucide="pencil" class="h-3.5 w-3.5"></i> Edit &amp; resend</button>
+            <button class="ml-auto grid h-7 w-7 place-items-center rounded-md text-[#9aa3ad] hover:bg-[#f3f4f6]"><i data-lucide="more-horizontal" class="h-4 w-4"></i></button>
+          </div>
+
+          <!-- Analysis summary -->
+          <div class="grid grid-cols-3 gap-px border-b border-[#e5e7eb] bg-[#e5e7eb] text-[12px]">
+            <div class="bg-white px-3 py-2"><div class="text-[10px] uppercase tracking-wide text-[#9aa3ad]">Model</div><div class="font-medium">gpt-4o</div></div>
+            <div class="bg-white px-3 py-2"><div class="text-[10px] uppercase tracking-wide text-[#9aa3ad]">Streaming</div><div class="flex items-center gap-1 font-medium text-[#039855]"><i data-lucide="check" class="h-3.5 w-3.5"></i> SSE</div></div>
+            <div class="bg-white px-3 py-2"><div class="text-[10px] uppercase tracking-wide text-[#9aa3ad]">Status</div><div class="font-medium text-[#039855]">200</div></div>
+            <div class="bg-white px-3 py-2"><div class="text-[10px] uppercase tracking-wide text-[#9aa3ad]">Tokens</div><div class="font-medium">512 → 1.3k</div></div>
+            <div class="bg-white px-3 py-2"><div class="text-[10px] uppercase tracking-wide text-[#9aa3ad]">Est. cost</div><div class="font-medium">~$0.021</div></div>
+            <div class="bg-white px-3 py-2"><div class="text-[10px] uppercase tracking-wide text-[#9aa3ad]">Source</div><div class="font-medium">Main · fetch</div></div>
+          </div>
+
+          <!-- Tabs -->
+          <div class="flex gap-4 overflow-x-auto border-b border-[#e5e7eb] px-4 text-[12px]">
+            <button class="-mb-px whitespace-nowrap border-b-2 border-[#175cd3] py-2 font-medium text-[#175cd3]">Summary</button>
+            <button class="-mb-px whitespace-nowrap border-b-2 border-transparent py-2 font-medium text-[#6b7280] hover:text-[#111]">Headers</button>
+            <button class="-mb-px whitespace-nowrap border-b-2 border-transparent py-2 font-medium text-[#6b7280] hover:text-[#111]">Payload</button>
+            <button class="-mb-px whitespace-nowrap border-b-2 border-transparent py-2 font-medium text-[#6b7280] hover:text-[#111]">Response</button>
+            <button class="-mb-px whitespace-nowrap border-b-2 border-transparent py-2 font-medium text-[#6b7280] hover:text-[#111]">Timing</button>
+            <button class="-mb-px whitespace-nowrap border-b-2 border-transparent py-2 font-medium text-[#6b7280] hover:text-[#111]">Cookies</button>
+          </div>
+
+          <div class="min-h-0 flex-1 space-y-4 overflow-auto p-4 text-[12px]">
+            <div>
+              <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#9aa3ad]">Endpoint</div>
+              <div class="break-all rounded-md border border-[#e5e7eb] bg-[#f9fafb] px-2.5 py-1.5 font-mono text-[11px]">POST https://api.openai.com/v1/chat/completions</div>
+            </div>
+            <div>
+              <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#9aa3ad]">Authorization</div>
+              <div class="flex items-center gap-2 rounded-md border border-[#e5e7eb] bg-[#f9fafb] px-2.5 py-1.5 font-mono text-[11px]">Bearer sk-pr…a91f <i data-lucide="shield-check" class="ml-auto h-3.5 w-3.5 text-[#039855]"></i></div>
+            </div>
+            <div>
+              <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#9aa3ad]">Response · SSE (3 events)</div>
+              <div class="space-y-1 rounded-md border border-[#e5e7eb] bg-[#f9fafb] p-2 font-mono text-[11px] text-[#374151]">
+                <div class="border-l-2 border-[#7c3aed] pl-2">data: {"choices":[{"delta":{"content":"Sure"}}]}</div>
+                <div class="border-l-2 border-[#7c3aed] pl-2">data: {"choices":[{"delta":{"content":", here…"}}]}</div>
+                <div class="border-l-2 border-[#cbd2da] pl-2 text-[#9aa3ad]">data: [DONE]</div>
+              </div>
+            </div>
+            <div>
+              <div class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#9aa3ad]">Timing</div>
+              <div class="space-y-1.5">
+                <div class="flex items-center gap-2"><span class="w-16 text-[#6b7280]">Wait (TTFB)</span><div class="h-2 flex-1 rounded bg-[#f1f3f5]"><div class="h-2 rounded bg-[#175cd3]" style="width: 38%"></div></div><span class="w-12 text-right text-[#9aa3ad]">680 ms</span></div>
+                <div class="flex items-center gap-2"><span class="w-16 text-[#6b7280]">Stream</span><div class="h-2 flex-1 rounded bg-[#f1f3f5]"><div class="h-2 rounded bg-[#7c3aed]" style="width: 62%"></div></div><span class="w-12 text-right text-[#9aa3ad]">1.12 s</span></div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <script>
+      const cat = {
+        ai: ["#7c3aed", "AI", "#6d28d9", "rgba(124,58,237,.1)"],
+        auth: ["#0891b2", "Auth", "#0e7490", "rgba(8,145,178,.1)"],
+        telemetry: ["#b45309", "Telemetry", "#b45309", "rgba(180,83,9,.1)"],
+        api: ["#0d9488", "API", "#0f766e", "rgba(13,148,136,.1)"],
+        asset: ["#475569", "Asset", "#475569", "rgba(71,85,105,.1)"],
+        ws: ["#c026d3", "WebSocket", "#a21caf", "rgba(192,38,211,.1)"],
+        update: ["#ca8a04", "Update", "#a16207", "rgba(202,138,4,.1)"],
+      };
+      const sColor = (s) => (s >= 500 ? "#b42318" : s >= 400 ? "#b54708" : s >= 300 ? "#854d0e" : s >= 200 ? "#039855" : "#175cd3");
+      const data = [
+        ["POST", 200, "ai", "api.openai.com", "/v1/chat/completions", "OpenAI · gpt-4o · stream", "4.2 KB", "1.8s", "Main", 1],
+        ["POST", 429, "ai", "api.anthropic.com", "/v1/messages", "Anthropic · quota", "320 B", "240ms", "Main", 0],
+        ["GET", 200, "auth", "auth.cursor.sh", "/token", "token refresh", "1.1 KB", "90ms", "Main", 0],
+        ["POST", 204, "telemetry", "telemetry.cursor.sh", "/events/batch", "analytics", "2.0 KB", "60ms", "Renderer", 0],
+        ["GET", 101, "ws", "stream.openai.com", "/v1/realtime", "12 frames", "—", "live", "Renderer", 0],
+        ["GET", 200, "asset", "cdn.jsdelivr.net", "/npm/lucide/icon.svg", "static", "3.4 KB", "20ms", "Renderer", 0],
+        ["GET", 304, "update", "update.cursor.sh", "/latest.yml", "update check", "0 B", "45ms", "Main", 0],
+        ["POST", 200, "api", "api.cursor.sh", "/v1/index/status", "workspace", "880 B", "110ms", "Renderer", 0],
+        ["POST", 500, "ai", "api.deepseek.com", "/chat/completions", "DeepSeek · error", "210 B", "1.0s", "Main", 0],
+      ];
+      document.getElementById("rows").innerHTML = data
+        .map(([m, s, c, host, path, svc, size, time, src, sel]) => {
+          const [dot, label, fg, bg] = cat[c];
+          return `<tr class="${sel ? "bg-[#eff8ff]" : "hover:bg-[#f9fafb]"}">
+            <td class="px-3 py-1.5 font-semibold text-[#374151]">${m}</td>
+            <td class="px-3 py-1.5 font-semibold" style="color:${sColor(s)}">${s}</td>
+            <td class="px-3 py-1.5"><span class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium" style="color:${fg};background:${bg}"><span class="h-1.5 w-1.5 rounded-full" style="background:${dot}"></span>${label}</span></td>
+            <td class="px-3 py-1.5"><span class="text-[#111]">${host}</span><span class="text-[#9aa3ad]">${path}</span> <span class="ml-1 text-[#9aa3ad]">· ${svc}</span></td>
+            <td class="px-3 py-1.5 text-right text-[#6b7280]">${size}</td>
+            <td class="px-3 py-1.5 text-right text-[#6b7280]">${time}</td>
+            <td class="px-3 py-1.5"><span class="inline-flex items-center gap-1 text-[#9aa3ad]"><i data-lucide="${src === "Main" ? "cpu" : "app-window"}" class="h-3 w-3"></i>${src}</span></td>
+          </tr>`;
+        })
+        .join("");
+      lucide.createIcons();
+    </script>
+  </body>
+</html>

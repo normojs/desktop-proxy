@@ -1,5 +1,12 @@
 /**
- * Install command — full flow for patching an Electron app.
+ * Install command — backend-agnostic flow for injecting the desktop-proxy
+ * runtime into an Electron app.
+ *
+ * The pipeline is shared across injection backends: stage the runtime/plugins,
+ * let the selected backend mutate the app (asar patch today; a dyld/V8-hook
+ * fallback could be added later), then re-sign (macOS) with whatever entitlements
+ * the backend needs, clear quarantine, and record state. See
+ * docs/macos-injection-plan.md.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync } from "node:fs";
@@ -7,11 +14,16 @@ import { join, dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { locateApp, type CodexInstall } from "../platform.js";
-import { patchAsar, backupOnce, readHeaderHash, readFileInAsar } from "../asar.js";
-import { writeFuse, FuseV1 } from "../fuses.js";
-import { signAppBundle, clearQuarantine, DEFAULT_SIGNING_IDENTITY } from "../codesign.js";
-import { readIntegrity, writeIntegrity } from "../platform.js";
+import { locateApp } from "../platform.js";
+import {
+  signAppBundle,
+  signAppBundleWithEntitlements,
+  clearQuarantine,
+  DEFAULT_SIGNING_IDENTITY,
+} from "../codesign.js";
+import { buildEntitlementsPlist } from "../macos-inject.js";
+import { permissions } from "./permissions.js";
+import { getBackend, DEFAULT_BACKEND, type BackendName, type BackendContext } from "../backends/index.js";
 
 export interface InstallOptions {
   app?: string;
@@ -19,6 +31,8 @@ export interface InstallOptions {
   noResign?: boolean;
   quiet?: boolean;
   verbose?: boolean;
+  /** Injection backend to use (default "asar"). */
+  backend?: BackendName;
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -27,8 +41,16 @@ export async function install(opts: InstallOptions = {}): Promise<void> {
   const log = opts.quiet ? () => {} : (msg: string) => console.log(`  ${msg}`);
 
   const codex = locateApp(opts.app);
+  const backend = getBackend(opts.backend ?? DEFAULT_BACKEND);
+
   console.log(`\ndesktop-proxy install`);
   console.log(`  App: ${codex.appRoot} (${codex.channel})`);
+  console.log(`  Backend: ${backend.name}`);
+
+  const support = backend.supported(codex);
+  if (!support.ok) {
+    throw new Error(`backend "${backend.name}" cannot be used here: ${support.reason}`);
+  }
 
   // Resolve user paths
   const userRoot = join(homedir(), ".desktop-proxy");
@@ -44,11 +66,8 @@ export async function install(opts: InstallOptions = {}): Promise<void> {
 
   log(`User dir: ${userRoot}`);
 
-  // ── Stage runtime files ──────────────────────────────────────────────────
-
+  // ── Stage runtime files (shared) ──────────────────────────────────────────
   const assetsSource = resolve(here, "..", "..", "assets");
-  // In production, assets are shipped alongside the installer.
-  // In development, we look for them in the build output.
   const runtimeSource = existsSync(join(assetsSource, "runtime"))
     ? join(assetsSource, "runtime")
     : resolve(here, "..", "..", "..", "runtime", "dist");
@@ -61,112 +80,47 @@ export async function install(opts: InstallOptions = {}): Promise<void> {
     console.warn(`  Build the runtime package first: pnpm build:runtime && pnpm build:preload`);
   }
 
-  // ── Backup originals ────────────────────────────────────────────────────
-
-  const backupAsar = join(backupDir, "app.asar");
-  backupOnce(codex.asarPath, backupAsar);
-  if (existsSync(`${codex.asarPath}.unpacked`)) {
-    backupOnce(`${codex.asarPath}.unpacked`, join(backupDir, "app.asar.unpacked"));
+  // The loader loads runtime/main.js and registers runtime/preload.js. The
+  // runtime bundle (main.js) ships in runtimeSource; ensure the preload bundle
+  // is staged alongside it (in dev it lives in the preload package's dist).
+  if (!existsSync(join(runtimeDir, "main.js"))) {
+    console.warn(`  Warning: runtime bundle main.js missing in ${runtimeDir} — run "pnpm build" (esbuild produces it)`);
   }
-  if (codex.electronBinary && existsSync(codex.electronBinary)) {
-    backupOnce(codex.electronBinary, join(backupDir, "Electron Framework"));
-  }
-  log("Backup ready");
-
-  // ── Patch app.asar ──────────────────────────────────────────────────────
-
-  const originalHash = readHeaderHash(codex.asarPath).headerHash;
-  let originalMain = "";
-
-  await patchAsar(codex.asarPath, (extractDir) => {
-    const pkgPath = join(extractDir, "package.json");
-    if (!existsSync(pkgPath)) {
-      throw new Error("app.asar has no package.json — is this an Electron app?");
-    }
-
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-    originalMain = String(pkg.main ?? "");
-    if (!originalMain) throw new Error("app.asar package.json has no `main` field");
-
-    // Check if already patched
-    if (pkg.__desktop_proxy) {
-      console.log("  Already patched, updating loader...");
-      originalMain = String(pkg.__desktop_proxy.originalMain);
-    }
-
-    pkg.__desktop_proxy = {
-      originalMain,
-      userRoot,
-      loader: "desktop-proxy-loader.cjs",
-    };
-    pkg.main = "desktop-proxy-loader.cjs";
-    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
-
-    // Copy loader stub into asar root
-    const loaderSources = [
-      resolve(here, "..", "..", "assets", "loader.cjs"),
-      resolve(here, "..", "..", "..", "loader", "dist", "loader.cjs"),
-      resolve(here, "..", "..", "..", "loader", "src", "loader.cjs"),
-    ];
-    let loaderCopied = false;
-    for (const src of loaderSources) {
-      if (existsSync(src)) {
-        cpSync(src, join(extractDir, "desktop-proxy-loader.cjs"));
-        loaderCopied = true;
-        break;
-      }
-    }
-    if (!loaderCopied) {
-      throw new Error(
-        "loader.cjs not found. Build the loader package first:\n" +
-        "  cp packages/loader/src/loader.cjs packages/loader/dist/loader.cjs",
-      );
-    }
-  });
-
-  const patchedHash = readHeaderHash(codex.asarPath).headerHash;
-  log(`Patched app.asar (entry was ${originalMain})`);
-
-  // ── Update ElectronAsarIntegrity ────────────────────────────────────────
-
-  if (codex.metaPath) {
-    writeIntegrity(codex, patchedHash);
-    log(`Updated ElectronAsarIntegrity → ${patchedHash.slice(0, 12)}...`);
-  }
-
-  // ── Flip Electron fuse ──────────────────────────────────────────────────
-
-  let fuseFlipped = false;
-  if (opts.noFuse !== true && existsSync(codex.electronBinary)) {
-    try {
-      const result = writeFuse(
-        codex.electronBinary,
-        "EnableEmbeddedAsarIntegrityValidation",
-        "off",
-      );
-      log(`Fuse EnableEmbeddedAsarIntegrityValidation: ${result.from} → ${result.to}`);
-      fuseFlipped = true;
-    } catch (e) {
-      console.warn(`  Warning: Fuse flip failed: ${(e as Error).message}`);
+  if (!existsSync(join(runtimeDir, "preload.js"))) {
+    const preloadSrc = existsSync(join(assetsSource, "runtime", "preload.js"))
+      ? join(assetsSource, "runtime", "preload.js")
+      : resolve(here, "..", "..", "..", "preload", "dist", "preload.js");
+    if (existsSync(preloadSrc)) {
+      cpSync(preloadSrc, join(runtimeDir, "preload.js"));
+      log("Preload staged");
+    } else {
+      console.warn(`  Warning: preload bundle not found at ${preloadSrc} — renderer plugins won't load`);
     }
   }
 
-  // ── Re-sign on macOS ────────────────────────────────────────────────────
+  // ── Backend-specific injection (backup + patch/inject) ────────────────────
+  const ctx: BackendContext = { install: codex, userRoot, runtimeDir, backupDir, log, noFuse: opts.noFuse };
+  const result = await backend.apply(ctx);
 
+  // ── Re-sign on macOS (shared; entitlements from the backend) ──────────────
   let resigned = false;
   if (opts.noResign !== true && codex.platform === "darwin") {
     clearQuarantine(codex.appRoot);
-    signAppBundle(codex.appRoot, { identityName: DEFAULT_SIGNING_IDENTITY });
+    if (result.entitlements.length > 0) {
+      const entitlementsPath = join(userRoot, "inject.entitlements");
+      writeFileSync(entitlementsPath, buildEntitlementsPlist(result.entitlements));
+      signAppBundleWithEntitlements(codex.appRoot, entitlementsPath, { identityName: DEFAULT_SIGNING_IDENTITY });
+    } else {
+      signAppBundle(codex.appRoot, { identityName: DEFAULT_SIGNING_IDENTITY });
+    }
     resigned = true;
     log("Re-signed app bundle with local identity");
   }
 
-  // ── Deploy default request-interceptor plugin ────────────────────────────
-
+  // ── Deploy default request-interceptor plugin (shared) ────────────────────
   deployRequestInterceptorPlugin(pluginsDir, log);
 
-  // ── Write state ─────────────────────────────────────────────────────────
-
+  // ── Write state ───────────────────────────────────────────────────────────
   const statePath = join(userRoot, "state.json");
   writeFileSync(
     statePath,
@@ -174,15 +128,13 @@ export async function install(opts: InstallOptions = {}): Promise<void> {
       {
         version: "0.1.0",
         installedAt: new Date().toISOString(),
+        backend: backend.name,
         appRoot: codex.appRoot,
-        originalAsarHash: originalHash,
-        patchedAsarHash: patchedHash,
         codexVersion: null,
         codexChannel: codex.channel,
         codexBundleId: codex.bundleId,
-        fuseFlipped,
         resigned,
-        originalEntryPoint: originalMain,
+        ...result.state,
       },
       null,
       2,
@@ -194,6 +146,13 @@ export async function install(opts: InstallOptions = {}): Promise<void> {
   console.log(`  Logs:     ${logDir}`);
   console.log(`\n  Launch the app normally; plugins will load automatically.`);
   console.log();
+
+  // Re-signing reset the app's macOS TCC permissions; guide a one-time re-grant
+  // and open System Settings. (No-op on Windows/Linux, which don't reset perms.)
+  if (resigned && codex.platform === "darwin") {
+    console.log(`  Re-signing reset macOS permissions for this app (one-time). Re-grant:`);
+    permissions({ openRoot: true });
+  }
 }
 
 function deployRequestInterceptorPlugin(pluginsDir: string, log: (msg: string) => void): void {

@@ -15,11 +15,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@desktop-proxy/plugin-sdk": "workspace:*",
     "@electron/asar": "^4.2",
-    "@desktop-proxy/plugin-sdk": "workspace:*"
+    "nats-jwt": "^0.0.9",
+    "nkeys.js": "^1.1.0",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@types/node": "^22",
+    "@types/qrcode-terminal": "^0.12.2",
     "typescript": "^6.0"
   }
 }

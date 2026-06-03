@@ -5,17 +5,21 @@
   "description": "Main process runtime — hooks Electron sessions, manages plugins, provides IPC bridge",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && esbuild src/index.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/main.js",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@desktop-proxy/plugin-sdk": "workspace:*"
+    "@desktop-proxy/plugin-sdk": "workspace:*",
+    "nats": "^2.29.3",
+    "nats-jwt": "^0.0.9",
+    "nkeys.js": "^1.1.0"
   },
   "devDependencies": {
     "@types/node": "^22",
     "electron": "^42.3.1",
+    "esbuild": "^0.28.0",
     "typescript": "^6.0"
   }
 }
