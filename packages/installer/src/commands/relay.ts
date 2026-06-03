@@ -20,6 +20,7 @@ import {
   currentProvider,
   hasDproxRelay,
 } from "../codex-config.js";
+import { getIdeAdapter } from "../ide/adapters.js";
 
 const USER_ROOT = join(homedir(), ".desktop-proxy");
 const CONFIG_FILE = join(USER_ROOT, "config.json");
@@ -60,6 +61,41 @@ function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+/**
+ * Resolve a config-redirect IDE target from --ide/--codex (the adapter decides
+ * what's possible). Returns the IDE id, or null if none requested. Exits with
+ * honest guidance for IDEs whose model traffic isn't relay-redirectable.
+ */
+function resolveRedirectIde(opts: RelayOptions): string | null {
+  const id = opts.ide ?? (opts.codex ? "codex" : null);
+  if (!id) return null;
+  const adapter = getIdeAdapter(id);
+  if (!adapter) {
+    console.error(`\n  Unknown IDE "${id}". Known: codex, cursor, windsurf.\n`);
+    process.exit(1);
+  }
+  const mc = adapter.modelControl;
+  if (mc.kind === "in-process") {
+    console.error(
+      `\n  ${adapter.displayName} calls the model in-process — the relay redirect doesn't apply.\n` +
+        `  Use "dprox install --app <${adapter.displayName}>" + the in-app interceptors / raceRequest instead.\n`,
+    );
+    process.exit(1);
+  }
+  if (mc.kind === "language-server") {
+    console.error(
+      `\n  ${adapter.displayName}'s model client is a proprietary language server (not redirectable).\n` +
+        `  You can observe its traffic via an HTTPS proxy + MITM CA, but not redirect it to another model.\n`,
+    );
+    process.exit(1);
+  }
+  if (mc.tool !== "codex") {
+    console.error(`\n  config-redirect for ${adapter.displayName} is not implemented yet.\n`);
+    process.exit(1);
+  }
+  return id;
+}
+
 export type RelaySubcommand = "on" | "off" | "status" | "daemon";
 
 export interface RelayOptions {
@@ -68,6 +104,8 @@ export interface RelayOptions {
   port?: number;
   proxy?: string;
   codex?: boolean;
+  /** Target IDE id (codex/cursor/windsurf). `--codex` is sugar for `--ide codex`. */
+  ide?: string;
   json?: boolean;
   /** Skip writing ~/.codex/auth.json (keep the real ChatGPT login). */
   noAuth?: boolean;
@@ -128,8 +166,9 @@ function relayOn(opts: RelayOptions): void {
 
   // Codex auto-wire: chain through the current provider unless an upstream/key
   // is explicitly given, so we sit in front of an existing relay without breaking it.
+  const redirectIde = resolveRedirectIde(opts);
   let codexToml = "";
-  if (opts.codex) {
+  if (redirectIde) {
     if (!existsSync(CODEX_CONFIG)) {
       console.error(`\n  Error: ${CODEX_CONFIG} not found — is Codex installed/configured?\n`);
       process.exit(1);
@@ -165,7 +204,7 @@ function relayOn(opts: RelayOptions): void {
   };
   writeConfig(cfg);
 
-  if (opts.codex) {
+  if (redirectIde) {
     const providerToken = token ?? "dprox-local";
     const bak = `${CODEX_CONFIG}.dprox-bak-${stamp()}`;
     copyFileSync(CODEX_CONFIG, bak);
@@ -205,7 +244,8 @@ function relayOff(opts: RelayOptions): void {
     writeConfig(cfg);
   }
 
-  if (opts.codex && existsSync(CODEX_CONFIG)) {
+  const redirectIde = resolveRedirectIde(opts);
+  if (redirectIde && existsSync(CODEX_CONFIG)) {
     const toml = readFileSync(CODEX_CONFIG, "utf8");
     if (hasDproxRelay(toml)) {
       const bak = `${CODEX_CONFIG}.dprox-bak-${stamp()}`;

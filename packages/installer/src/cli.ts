@@ -78,7 +78,8 @@ Options:
   --proxy <url>            Relay outbound proxy, e.g. http://127.0.0.1:7897 (relay on)
   --map <k=v,...>          Relay model rewrite, e.g. "gpt-5*=deepseek-v4-pro" (relay on)
   --fallback <m,...>       Relay fallback models to retry on error (relay on)
-  --codex                  Also wire ~/.codex/config.toml + auth.json login bypass (relay on/off)
+  --ide <id>               Target IDE for relay (codex|cursor|windsurf); dispatches per the IdeAdapter
+  --codex                  Sugar for --ide codex (wire ~/.codex/config.toml + auth.json login bypass)
   --no-auth                With --codex, keep real ChatGPT login (don't write auth.json)
   --wire-api <v>           Codex provider wire_api: responses (default) | chat
   --upstream-api <v>       Relay upstream protocol: responses (default) | chat (translate Responses↔chat for DeepSeek etc.)
@@ -158,6 +159,8 @@ async function main(): Promise<void> {
       opts.fallback = args[++i];
     } else if (a === "--codex") {
       opts.codex = true;
+    } else if (a === "--ide" && args[i + 1]) {
+      opts.ide = args[++i];
     } else if (a === "--no-auth") {
       opts.noAuth = true;
     } else if (a === "--wire-api" && args[i + 1]) {
@@ -261,6 +264,7 @@ async function main(): Promise<void> {
         port: opts.port as number | undefined,
         proxy: opts.proxy as string | undefined,
         codex: opts.codex as boolean | undefined,
+        ide: opts.ide as string | undefined,
         noAuth: opts.noAuth as boolean | undefined,
         wireApi: opts.wireApi as string | undefined,
         upstreamApi: opts.upstreamApi === "chat" ? "chat" : opts.upstreamApi === "responses" ? "responses" : undefined,
