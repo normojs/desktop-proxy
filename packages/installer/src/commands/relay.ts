@@ -68,6 +68,8 @@ export interface RelayOptions {
   json?: boolean;
   /** Skip writing ~/.codex/auth.json (keep the real ChatGPT login). */
   noAuth?: boolean;
+  /** Codex provider wire_api: "responses" (default) or "chat" (for DeepSeek etc.). */
+  wireApi?: string;
   /** model rewrite map (exact or `prefix*`). */
   modelMap?: Record<string, string>;
   /** ordered fallback models if the request errors. */
@@ -129,7 +131,7 @@ function relayOn(opts: RelayOptions): void {
     const providerToken = token ?? "dprox-local";
     const bak = `${CODEX_CONFIG}.dprox-bak-${stamp()}`;
     copyFileSync(CODEX_CONFIG, bak);
-    writeFileSync(CODEX_CONFIG, applyCodexRelay(codexToml, { baseUrl: localBase, token: providerToken }));
+    writeFileSync(CODEX_CONFIG, applyCodexRelay(codexToml, { baseUrl: localBase, token: providerToken, wireApi: opts.wireApi }));
     console.log(`\n  ✓ Codex core pointed at the relay (${localBase}).`);
     console.log(`    Backup:  ${bak}`);
 

@@ -80,6 +80,7 @@ Options:
   --fallback <m,...>       Relay fallback models to retry on error (relay on)
   --codex                  Also wire ~/.codex/config.toml + auth.json login bypass (relay on/off)
   --no-auth                With --codex, keep real ChatGPT login (don't write auth.json)
+  --wire-api <v>           Codex provider wire_api: responses (default) | chat (DeepSeek etc.)
   --id/--name/--scope <v>  create-plugin manifest fields
   --json            Machine-readable output (doctor, plugin/config/validate)
   --quiet           Suppress progress output
@@ -158,6 +159,8 @@ async function main(): Promise<void> {
       opts.codex = true;
     } else if (a === "--no-auth") {
       opts.noAuth = true;
+    } else if (a === "--wire-api" && args[i + 1]) {
+      opts.wireApi = args[++i];
     } else if (a === "--strict-ssl") {
       opts.strictSSL = true;
     } else if (a === "--open" && args[i + 1]) {
@@ -256,6 +259,7 @@ async function main(): Promise<void> {
         proxy: opts.proxy as string | undefined,
         codex: opts.codex as boolean | undefined,
         noAuth: opts.noAuth as boolean | undefined,
+        wireApi: opts.wireApi as string | undefined,
         modelMap,
         fallbackModels,
         json,
