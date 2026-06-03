@@ -17,6 +17,20 @@ the **shared hard logic is written and unit-tested** and vendored here. What's l
 is the uni-app x native transport (an ed25519 plugin + a NATS-over-WebSocket client)
 and the `.uvue` screens.
 
+## First steps (fresh session, after Cursor reload)
+
+1. Confirm the **`@dcloudio/uni-app-x-mcp`** MCP is active (root `.cursor/mcp.json`);
+   use it for exact UTS stdlib/API questions instead of guessing.
+2. Skim `.cursor/rules/` (uts, uvue, api, ucss, conditional-compilation, best-practices,
+   core-protocol). Remember the core-protocol DoD: **runtime-verified in HBuilderX**.
+3. Begin **P1**: port `vendor/remote-core/src/*.ts` → `.uts` (start with `util.ts` —
+   simplest; then `nkey`, `subjects`, `nats-protocol`, `bus-client`, `chat-reconstruct`).
+   Keep `vendor/remote-core/test/*` as the behavioral spec. Verify each in HBuilderX.
+4. Then the `uts-nkeys` ed25519 plugin + the NATS-over-WS client + the screens.
+
+Remote *drive* (sending from the phone) is deliberately **deferred** — build the
+observe-first app first (see P4 in `docs/remote-app-plan.md`).
+
 ## Current state
 
 - ✅ **Desktop (desktop-proxy repo)** — relay platform + NATS remote bus, with the
