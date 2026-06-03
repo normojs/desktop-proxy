@@ -15,31 +15,42 @@
 #
 # Vars: DOMAIN(optional) TLS=letsencrypt|selfsigned(default) PM=systemd|pm2|docker(default systemd)
 #       PORT(4222) WS_PORT(8443) VER(nats-server ver) NATS_DIR(/etc/nats)
-#       SKIP_NSC=1 to skip account automation (do it manually later)
+#       SKIP_NSC=1 skip account automation; FORCE_INSTALL=1 re-download binaries
+# China network helpers:
+#       PROXY=http://127.0.0.1:7890   route downloads through a proxy
+#       GH_MIRROR=https://ghproxy.com/  prefix for github.com downloads (note trailing /)
+# Safe to re-run (idempotent): existing nats-server/nsc accounts are reused.
 
 set -euo pipefail
 
 TLS="${TLS:-selfsigned}"; PM="${PM:-systemd}"; PORT="${PORT:-4222}"; WS_PORT="${WS_PORT:-8443}"
 VER="${VER:-v2.14.1}"; NATS_DIR="${NATS_DIR:-/etc/nats}"; DOMAIN="${DOMAIN:-}"; SKIP_NSC="${SKIP_NSC:-0}"
+PROXY="${PROXY:-}"; GH_MIRROR="${GH_MIRROR:-}"; FORCE_INSTALL="${FORCE_INSTALL:-0}"
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 HOST_ADDR="${DOMAIN:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 
 arch() { case "$(uname -m)" in x86_64|amd64) echo amd64;; aarch64|arm64) echo arm64;; *) echo amd64;; esac; }
 need() { command -v "$1" >/dev/null 2>&1; }
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+CURL_OPTS=(-fL --retry 3 --retry-delay 2 --connect-timeout 20)
+[ -n "$PROXY" ] && CURL_OPTS+=(--proxy "$PROXY")
+ghurl() { case "$1" in https://github.com/*|https://raw.githubusercontent.com/*) echo "${GH_MIRROR}$1";; *) echo "$1";; esac; }
+dl() { local u; u="$(ghurl "$1")"; say "Downloading $u"; curl "${CURL_OPTS[@]}" --progress-bar -o "$2" "$u"; }
 
-say "desktop-proxy NATS one-click setup (TLS=$TLS, PM=$PM, host=$HOST_ADDR)"
+say "desktop-proxy NATS one-click setup (TLS=$TLS, PM=$PM, host=$HOST_ADDR${PROXY:+, proxy=$PROXY}${GH_MIRROR:+, mirror=$GH_MIRROR})"
 
 # ── 1. install nats-server, nsc, jq ──────────────────────────────────────────
-if ! need nats-server; then
+if ! need nats-server || [ "$FORCE_INSTALL" = "1" ]; then
   say "Installing nats-server $VER"
   TMP="$(mktemp -d)"
-  curl -fsSL -o "$TMP/n.tgz" "https://github.com/nats-io/nats-server/releases/download/${VER}/nats-server-${VER}-linux-$(arch).tar.gz"
+  dl "https://github.com/nats-io/nats-server/releases/download/${VER}/nats-server-${VER}-linux-$(arch).tar.gz" "$TMP/n.tgz"
   tar -xzf "$TMP/n.tgz" -C "$TMP"; $SUDO install "$TMP"/nats-server-*/nats-server /usr/local/bin/nats-server; rm -rf "$TMP"
+else
+  say "nats-server already installed ($(nats-server --version 2>/dev/null)) — skipping (FORCE_INSTALL=1 to reinstall)"
 fi
-if [ "$SKIP_NSC" != "1" ] && ! need nsc; then
-  say "Installing nsc"
-  curl -fsSL "https://github.com/nats-io/nsc/releases/latest/download/nsc-linux-$(arch).zip" -o /tmp/nsc.zip
+if [ "$SKIP_NSC" != "1" ] && { ! need nsc || [ "$FORCE_INSTALL" = "1" ]; }; then
+  need unzip || $SUDO apt-get install -y unzip >/dev/null 2>&1 || true
+  dl "https://github.com/nats-io/nsc/releases/latest/download/nsc-linux-$(arch).zip" /tmp/nsc.zip
   $SUDO unzip -o /tmp/nsc.zip -d /usr/local/bin >/dev/null
 fi
 need jq || $SUDO apt-get install -y jq >/dev/null 2>&1 || true
@@ -50,8 +61,11 @@ $SUDO mkdir -p "$NATS_DIR/tls" "$NATS_DIR/jwt"
 CERT="$NATS_DIR/tls/cert.pem"; KEY="$NATS_DIR/tls/key.pem"
 if [ "$TLS" = "letsencrypt" ]; then
   [ -n "$DOMAIN" ] || { echo "letsencrypt requires DOMAIN=..."; exit 1; }
+  say "Obtaining cert for $DOMAIN — needs DNS A record → this server and port 80 reachable"
+  need ufw && { $SUDO ufw allow 80/tcp >/dev/null 2>&1 || true; }
   need certbot || $SUDO apt-get install -y certbot
-  $SUDO certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos -m "admin@$DOMAIN"
+  # --keep-until-expiring makes re-runs reuse the existing cert (no rate-limit hit).
+  $SUDO certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos -m "admin@$DOMAIN" --keep-until-expiring
   CERT="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"; KEY="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
 else
   say "Generating self-signed cert for $HOST_ADDR"
@@ -77,10 +91,13 @@ ACCOUNT_ID=""; ACCOUNT_SEED=""
 if [ "$SKIP_NSC" != "1" ]; then
   say "Configuring decentralized JWT (operator/SYS/APP + nats-resolver)"
   export NKEYS_PATH="${NKEYS_PATH:-$HOME/.local/share/nats/nsc/keys}"
-  nsc add operator --generate-signing-key --sys --name DP >/dev/null 2>&1 || true
+  # Idempotent: only create operator/account if missing, so re-runs keep the
+  # SAME keys (existing desktops/phones stay valid).
+  nsc describe operator DP >/dev/null 2>&1 || nsc add operator --generate-signing-key --sys --name DP
   nsc edit operator --require-signing-keys --account-jwt-server-url "nats://127.0.0.1:$PORT" >/dev/null 2>&1 || true
-  nsc add account APP >/dev/null 2>&1 || true
-  nsc edit account APP --sk generate >/dev/null 2>&1 || true
+  nsc describe account APP >/dev/null 2>&1 || nsc add account APP
+  SKN="$(nsc describe account APP -J 2>/dev/null | jq -r '(.nats.signing_keys // []) | length')"
+  [ "${SKN:-0}" -ge 1 ] || nsc edit account APP --sk generate
   nsc generate config --nats-resolver --sys-account SYS | $SUDO tee "$NATS_DIR/resolver.conf" >/dev/null
 fi
 
