@@ -241,6 +241,8 @@ interface Config {
     routes?: import("./net/route").RouteRule[];
     /** Cost budget: daily/monthly USD cap, warn or block. */
     budget?: import("./net/budget").BudgetConfig;
+    /** Outbound guardrails: block/redact content before forwarding. */
+    guardrails?: import("./net/guardrails").GuardRule[];
   };
   /** Stable id for this install, used in NATS subjects (auto-generated). */
   instanceId?: string;
@@ -502,7 +504,7 @@ async function syncRelay(): Promise<void> {
     const r = cfg.relay;
     const want = r?.enabled === true && typeof r.upstream === "string" && r.upstream.length > 0;
     const key = want
-      ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0, m: r!.modelMap ?? {}, f: r!.fallbackModels ?? [], a: r!.upstreamApi ?? "", t: r!.transforms ?? null, rt: r!.routes ?? null, b: r!.budget ?? null })
+      ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0, m: r!.modelMap ?? {}, f: r!.fallbackModels ?? [], a: r!.upstreamApi ?? "", t: r!.transforms ?? null, rt: r!.routes ?? null, b: r!.budget ?? null, g: r!.guardrails ?? null })
       : "";
     if (key === _relayKey) return; // unchanged
 
@@ -530,6 +532,7 @@ async function syncRelay(): Promise<void> {
         upstreamApi: r!.upstreamApi,
         transforms: r!.transforms,
         routes: r!.routes,
+        guardrails: r!.guardrails,
         maxBodyBytes: readConfig().maxResponseBodyBytes ?? 1024 * 1024,
       },
       {

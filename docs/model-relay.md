@@ -60,10 +60,21 @@ A small HTTP server (inside the injected runtime, config-gated by `config.relay`
       { "when": { "maxChars": 400 }, "model": "deepseek-v4-flash" },
       { "when": {}, "model": "deepseek-v4-pro" }
     ],
-    "budget": { "dailyUsd": 5, "action": "block" }   // cost cap: warn | block when over
+    "budget": { "dailyUsd": 5, "action": "block" },  // cost cap: warn | block when over
+    "guardrails": [                                  // block/redact before forwarding
+      { "pattern": "INTERNAL-ONLY", "action": "block", "message": "internal marker" },
+      { "pattern": "\\b[\\w.]+@[\\w.]+\\b", "action": "redact", "replacement": "[email]" }
+    ]
   }
 }
 ```
+
+**Guardrails** inspect each outgoing request: `block` rejects it (HTTP 422) before
+it leaves the machine; `redact` masks matches so the upstream model never sees them
+(e.g. strip internal markers or PII from prompts). The in-flight counterpart to
+capture redaction.
+
+`dprox relay logs [--follow]` tails the standalone daemon/service log.
 
 **Budgets** cap estimated spend: the relay accumulates per-day/month USD from token
 usage; `action: "warn"` logs when over, `"block"` rejects new requests (HTTP 402)

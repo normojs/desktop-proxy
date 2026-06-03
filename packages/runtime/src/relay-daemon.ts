@@ -20,6 +20,7 @@ import { extractUsage } from "./net/traffic-cost.js";
 import { redactEntry } from "./net/redact.js";
 import type { RelayTransforms } from "./net/transform.js";
 import type { RouteRule } from "./net/route.js";
+import type { GuardRule } from "./net/guardrails.js";
 import { createBudgetTracker, type BudgetConfig } from "./net/budget.js";
 import { startRelayUi, type UiEntry } from "./net/relay-ui.js";
 
@@ -37,6 +38,7 @@ interface RelayCfg {
   upstreamApi?: "responses" | "chat";
   transforms?: RelayTransforms;
   routes?: RouteRule[];
+  guardrails?: GuardRule[];
   budget?: BudgetConfig;
   /** Local dashboard port (default relay port + 1; set 0 to disable). */
   uiPort?: number;
@@ -87,6 +89,7 @@ async function main(): Promise<void> {
     upstreamApi: r.upstreamApi,
     transforms: r.transforms,
     routes: r.routes,
+    guardrails: r.guardrails,
     maxBodyBytes,
   };
 

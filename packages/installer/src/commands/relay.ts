@@ -22,6 +22,7 @@ import {
 } from "../codex-config.js";
 import { getIdeAdapter } from "../ide/adapters.js";
 import { buildRelayDiagnostics, overallStatus, type RelayCheck } from "../relay-doctor.js";
+import { tailFile, type LogsOptions } from "./logs.js";
 import net from "node:net";
 import {
   buildRelayLaunchdPlist,
@@ -121,7 +122,16 @@ function resolveRedirectIde(opts: RelayOptions): string | null {
   return id;
 }
 
-export type RelaySubcommand = "on" | "off" | "status" | "daemon" | "service" | "doctor";
+export type RelaySubcommand = "on" | "off" | "status" | "daemon" | "service" | "doctor" | "logs";
+
+/** Tail the standalone daemon/service log (relay-daemon.out). */
+export function relayLogs(opts: LogsOptions = {}): void {
+  tailFile(
+    join(USER_ROOT, "log", "relay-daemon.out"),
+    opts,
+    'Start the daemon ("dprox relay daemon" or "relay service install"). Injected-app relay logs go to main.log ("dprox logs").',
+  );
+}
 
 export interface RelayOptions {
   upstream?: string;

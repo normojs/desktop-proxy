@@ -23,6 +23,7 @@ import { request as undiciRequest, ProxyAgent, type Dispatcher } from "undici";
 import { responsesToChat, ResponsesStreamConverter } from "./protocol/responses-chat.js";
 import { applySystemTransforms, applyParams, transformsActive, type RelayTransforms } from "./transform.js";
 import { selectRouteModel, type RouteRule } from "./route.js";
+import { applyGuardrails, type GuardRule } from "./guardrails.js";
 
 export interface RelayObservedRequest {
   id: string;
@@ -75,6 +76,8 @@ export interface RelayOptions {
   transforms?: RelayTransforms;
   /** Conditional model routes (evaluated before modelMap; first match wins). */
   routes?: RouteRule[];
+  /** Outbound guardrails: block or redact matching content before forwarding. */
+  guardrails?: GuardRule[];
 }
 
 export interface RelayHooks {
@@ -283,6 +286,21 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
         baseObj.model = m;
         sentBody = Buffer.from(JSON.stringify(baseObj));
         sentModel = m;
+      }
+      // Outbound guardrails: block or redact before the body leaves the machine.
+      if (opts.guardrails && opts.guardrails.length > 0 && !isBodyless) {
+        const g = applyGuardrails(sentBody.toString("utf8"), opts.guardrails);
+        if (g.blocked) {
+          if (!res.headersSent) res.writeHead(422, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: g.message, type: "relay_guardrail" } }));
+          hooks.log("warn", `relay: guardrail blocked: ${g.message}`);
+          hooks.onResponse?.({ requestId: id, status: 422, statusText: "Blocked", headers: {}, body: g.message ?? "blocked" });
+          return;
+        }
+        if (g.redactions > 0) {
+          sentBody = Buffer.from(g.text);
+          hooks.log("info", `relay: guardrail redacted ${g.redactions} match(es)`);
+        }
       }
       try {
         upstream = await undiciRequest(target, {

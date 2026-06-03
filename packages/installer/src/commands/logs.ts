@@ -21,10 +21,14 @@ export interface LogsOptions {
 
 export function logs(opts: LogsOptions = {}): void {
   const file = join(homedir(), ".desktop-proxy", "log", "main.log");
+  tailFile(file, opts, "Launch a patched app to generate logs.");
+}
 
+/** Print (and optionally follow) the tail of a log file. */
+export function tailFile(file: string, opts: LogsOptions = {}, emptyHint = ""): void {
   if (!existsSync(file)) {
     console.log(`\n  No log file yet at ${file}`);
-    console.log(`  Launch a patched app to generate logs.\n`);
+    if (emptyHint) console.log(`  ${emptyHint}\n`);
     return;
   }
 

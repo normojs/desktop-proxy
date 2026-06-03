@@ -29,7 +29,7 @@ import { isBackendName, type BackendName } from "./backends/index.js";
 import { proxy, type ProxySubcommand } from "./commands/proxy.js";
 import { permissions } from "./commands/permissions.js";
 import { pair } from "./commands/pair.js";
-import { relay, relayService, type RelaySubcommand, type RelayServiceAction } from "./commands/relay.js";
+import { relay, relayService, relayLogs, type RelaySubcommand, type RelayServiceAction } from "./commands/relay.js";
 
 function printHelp(): void {
   console.log(`
@@ -61,6 +61,7 @@ Usage:
   desktop-proxy relay <on|off|status|daemon> Local model-traffic relay: capture/rewrite/translate model calls. "daemon" runs it standalone (no app injection needed for Codex); "--codex" wires ~/.codex/config.toml + login bypass
   desktop-proxy relay service <install|uninstall|status> Run the relay daemon as a background service (launchd/systemd/Task Scheduler; auto-start)
   desktop-proxy relay doctor          Diagnose the relay/Codex setup (config, daemon, upstream reachability)
+  desktop-proxy relay logs [--follow] Tail the standalone daemon/service log
 
 Options:
   --app <path>      Path to the .app bundle (auto-detected if omitted)
@@ -269,8 +270,12 @@ async function main(): Promise<void> {
         relayService(action);
         break;
       }
+      if (sub === "logs") {
+        relayLogs({ follow: opts.follow as boolean | undefined, lines: opts.lines as number | undefined });
+        break;
+      }
       if (sub !== "on" && sub !== "off" && sub !== "status" && sub !== "daemon" && sub !== "doctor") {
-        console.error(`Unknown relay subcommand "${sub}". Use: on | off | status | daemon | service | doctor.`);
+        console.error(`Unknown relay subcommand "${sub}". Use: on | off | status | daemon | service | doctor | logs.`);
         process.exit(1);
       }
       const modelMap = typeof opts.map === "string" ? parseModelMap(opts.map) : undefined;
