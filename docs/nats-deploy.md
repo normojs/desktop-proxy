@@ -1,275 +1,99 @@
-# NATS 服务器部署教程（去中心化 JWT，配一次后零服务器操作）
+# NATS 服务器部署(Docker 一键,配一次后零运维)
 
-desktop-proxy 远程总线用 **NATS**(中继 + 事件总线 + 鉴权 + 主题级 ACL)。采用**去中心化 JWT + nats-resolver**:服务器**只配置一次**;之后桌面用账号签名密钥在**本地签发**自己的 hub 凭据,`desktop-proxy pair` 为每台手机**本地现签** device 凭据——**新增桌面/手机都不用再登服务器**。
+desktop-proxy 远程总线用 **NATS**(中继 + 事件总线 + 鉴权 + 主题 ACL),**只用 Docker** 部署。`scripts/nats-setup.sh` 一条命令搞定:装 Docker、拉镜像、TLS、去中心化 JWT 账号(MEMORY resolver,**无需 push**)、容器开机自启、防火墙,并打印桌面要粘贴的 `remote` 配置。**之后新增桌面/手机都不用再登服务器。**
 
 ```
-手机(原生App) ─TLS─┐
-                    ├─►  你的服务器: nats-server(operator+APP账号+nats-resolver)  ◄─TLS─ 桌面
-浏览器/CLI  ─wss─┘        验签即放行(账号已知),不需逐用户配置/重载
+手机/桌面 ──TLS──►  你的服务器: docker(nats)  ◄──TLS── 桌面/手机
+                    端口 4222(tls) / 8443(wss)
 ```
-
-> 适用:一台有公网 IP/域名的 Linux VPS。下面以 Ubuntu 为例。
 
 ---
 
-## 一键安装(在线,最省事)
+## 一键安装(在线)
 
-在**服务器**上以 root 或 sudo 执行——脚本自动完成 **安装 nats-server + nsc + 证书 + 去中心化 JWT 账号(operator/SYS/APP + nats-resolver)+ 开机自启 + 防火墙**,并在结尾打印好桌面要粘贴的 `remote` 配置(`url/accountSeed/accountId`):
+在**服务器**上以 root 或 sudo 执行:
 
 ```bash
-# 域名 + Let's Encrypt + systemd 开机自启(推荐)
 curl -fsSL https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh -o nats-setup.sh
-sudo DOMAIN=nats.dprox.mbu.ltd TLS=letsencrypt PM=systemd bash nats-setup.sh
 
-# 无域名快速自测(自签证书,管道直跑)
-curl -fsSL https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh | sudo bash
+# A) 有域名 + 自动签 Let's Encrypt(需 80 端口空闲、DNS 指向本机)
+sudo DOMAIN=nats.your-domain.com TLS=letsencrypt bash nats-setup.sh
 
-# Docker(restart=unless-stopped 即开机自启;脚本会自动装 Docker、以 root 容器挂载证书)
-curl -fsSL https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh -o nats-setup.sh
-sudo PM=docker DOMAIN=nats.your-domain.com TLS=letsencrypt bash nats-setup.sh
-# 已有 nginx/证书时用 TLS=existing(容器会自动挂载 /etc/letsencrypt 只读):
-sudo PM=docker TLS=existing DOMAIN=nats.your-domain.com \
+# B) 已有 nginx/证书(用现成证书,不抢 80)——推荐共存场景
+sudo TLS=existing DOMAIN=nats.your-domain.com \
   CERT_FILE=/etc/letsencrypt/live/nats.your-domain.com/fullchain.pem \
   KEY_FILE=/etc/letsencrypt/live/nats.your-domain.com/privkey.pem bash nats-setup.sh
+
+# C) 无域名快速自测(自签证书)
+sudo bash nats-setup.sh
 ```
-> Docker 模式:不装宿主 nats-server(用 `nats:2.14` 镜像);nsc 仍在宿主生成账号(MEMORY resolver 嵌进配置,经 `-v /etc/nats` 挂载);容器以 `-u 0:0` 运行以便读取 letsencrypt 私钥。
-变量:`DOMAIN`(可选)、`TLS=letsencrypt|selfsigned`、`PM=systemd|pm2|docker`、`PORT`(4222)、`WS_PORT`(8443)、`SKIP_NSC=1`(跳过账号自动化)、`FORCE_INSTALL=1`(重装二进制)。
 
-**国内网络(下载 github 慢/失败)**:用代理或 GitHub 镜像(二选一):
-```bash
-# 代理(脚本下载走它;不影响 localhost 的 nsc push)
-sudo PROXY=http://127.0.0.1:7890 DOMAIN=nats.your-domain.com TLS=letsencrypt bash nats-setup.sh
-# 或 GitHub 镜像前缀(注意结尾的 /)
-sudo GH_MIRROR=https://ghproxy.com/ DOMAIN=nats.your-domain.com TLS=letsencrypt bash nats-setup.sh
-```
-连脚本本身也可经镜像下载:`curl -fsSL https://ghproxy.com/https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh -o nats-setup.sh`。
-
-**依赖自动安装**:脚本自动识别包管理器(`apt`/`dnf`/`yum`/`zypper`/`pacman`/`apk`)并装好所需命令(`curl`/`tar`/`unzip`/`jq`,自签时 `openssl`,letsencrypt 时 `certbot`)。RHEL/CentOS 上 `certbot` 可能需先 `sudo dnf install -y epel-release`(用 `TLS=existing` 则不需要 certbot)。防火墙自动适配 `ufw`/`firewalld`(云服务器记得在**安全组**也放行 4222/8443)。
-
-**重复执行安全(重装)**:脚本**幂等**——已装的 nats-server 默认跳过(`FORCE_INSTALL=1` 才重装);已存在的 operator/APP 账号**复用、不重建**(密钥不变,已配对的桌面/手机继续有效);证书 `--keep-until-expiring` 复用;systemd/pm2/docker 直接重启替换。下载带进度条与重试。
-- Let's Encrypt 需:**域名 A 记录指向本机** + **80 端口可达**(脚本会放行 ufw 80)。
-
-**跑完后**:把脚本打印(也存于 `~/desktop-proxy-remote.json`)的 `remote` 块粘进每台桌面的 `~/.desktop-proxy/config.json` → 重启 app → `desktop-proxy pair` 加手机。**之后新增桌面/手机零服务器操作。** 下面是手动分步版(用于排错或自定义)。
+变量:`DOMAIN`、`TLS=letsencrypt|existing|selfsigned`、`PORT`(4222)、`WS_PORT`(8443)、`CERT_FILE/KEY_FILE`(existing)、`NATS_IMAGE`(默认 `nats:latest`)、`SKIP_NSC=1`。
 
 ---
 
-## 服务器已有 nginx / 其他网站(共存,推荐 TLS=existing)
+## 中国大陆网络(代理 / 镜像)
 
-NATS 用 `4222`/`8443`,与 nginx 的 `80`/`443` **不冲突**,可直接共存(放行 4222/8443 即可),**NATS 本身不需要 nginx 配置**。唯一注意:**别用 `certbot --standalone`**(会抢 80 端口)。两步:
+github、docker.io、get.docker.com 在国内常慢/被墙。按需加这些变量(可组合):
 
-1) 用你**现有的 nginx** 给该子域签证(免费 Let's Encrypt,**只要 `certbot`,不用 `-nginx` 插件**;不抢 80、不停机)。先加一个只用于签证的最小 vhost:
+```bash
+sudo \
+  PROXY=http://127.0.0.1:7890 \                # 代理:下载脚本依赖 + 安装 Docker 走它
+  GH_MIRROR=https://ghfast.top/ \              # GitHub 镜像:下载 nsc(脚本失败会自动试备用镜像)
+  DOCKER_MIRROR=https://docker.m.daocloud.io \ # Docker registry 镜像:拉 nats 镜像
+  DOCKER_INSTALL_MIRROR=Aliyun \              # 用阿里云源安装 Docker 本身
+  TLS=existing DOMAIN=nats.your-domain.com \
+  CERT_FILE=/etc/letsencrypt/live/nats.your-domain.com/fullchain.pem \
+  KEY_FILE=/etc/letsencrypt/live/nats.your-domain.com/privkey.pem \
+  bash nats-setup.sh
+```
+- 没有代理也行:`GH_MIRROR` 解决 nsc 下载,`DOCKER_MIRROR` 解决镜像拉取,`DOCKER_INSTALL_MIRROR=Aliyun` 解决装 Docker。
+- 连脚本本身都慢:`curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh -o nats-setup.sh`。
+- 常见 registry 镜像:`https://docker.m.daocloud.io`、`https://dockerproxy.net`、或你自己的阿里云加速器地址。
+
+---
+
+## 服务器已有 nginx / 其他网站(共存)
+
+NATS 用 `4222`/`8443`,与 nginx 的 `80`/`443` **不冲突**;**不要**让脚本用 `--standalone` 抢 80,改 `TLS=existing` 指向你已有证书。没有证书就用 **webroot** 免费签(只要 `certbot`,不用 `-nginx` 插件):
 ```nginx
 # /etc/nginx/conf.d/nats.conf
-server {
-  listen 80; server_name nats.dprox.mbu.ltd; root /var/www/html;
-  location /.well-known/acme-challenge/ { allow all; }
-}
+server { listen 80; server_name nats.your-domain.com; root /var/www/html;
+  location /.well-known/acme-challenge/ { allow all; } }
 ```
 ```bash
-sudo mkdir -p /var/www/html
-sudo nginx -t && sudo systemctl reload nginx
-sudo certbot certonly --webroot -w /var/www/html -d nats.dprox.mbu.ltd --non-interactive --agree-tos -m admin@dprox.mbu.ltd
+sudo mkdir -p /var/www/html && sudo nginx -t && sudo systemctl reload nginx
+sudo certbot certonly --webroot -w /var/www/html -d nats.your-domain.com --non-interactive --agree-tos -m admin@your-domain.com
 ```
-> 已有覆盖该域名的证书(如泛域名)就跳过本步,直接在第 2 步 `CERT_FILE/KEY_FILE` 指过去。
+然后用上面的 **B)** 命令(`TLS=existing` 指 `/etc/letsencrypt/live/nats.your-domain.com/`)。容器会自动只读挂载 `/etc/letsencrypt` 并以 `-u 0:0` 运行以读取私钥。
 
-2) 跑脚本,用 **`TLS=existing`** 指向刚拿到的证书(NATS 自己在 4222/8443 上用它,绕开 nginx):
-```bash
-curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh -o nats-setup.sh
-sudo TLS=existing PM=systemd DOMAIN=nats.dprox.mbu.ltd \
-  CERT_FILE=/etc/letsencrypt/live/nats.dprox.mbu.ltd/fullchain.pem \
-  KEY_FILE=/etc/letsencrypt/live/nats.dprox.mbu.ltd/privkey.pem \
-  GH_MIRROR=https://ghfast.top/ bash nats-setup.sh
-```
-桌面/手机直连 NATS:桌面 `tls://nats.dprox.mbu.ltd:4222`,手机 `wss://nats.dprox.mbu.ltd:8443`(都不经 nginx)。
-
-**(可选)让手机走标准 443**:用现有 nginx 把 443 的某子域反代到 NATS 的 websocket。需把 NATS websocket 设为内网 `no_tls`(改 `nats-server.conf` 的 websocket 段为 `port: 8080` + `no_tls: true`),再:
-```nginx
-server {
-  listen 443 ssl;  server_name nats.dprox.mbu.ltd;
-  ssl_certificate     /etc/letsencrypt/live/nats.dprox.mbu.ltd/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/nats.dprox.mbu.ltd/privkey.pem;
-  location / {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host; proxy_read_timeout 3600s;
-  }
-}
-```
-手机改用 `wss://nats.dprox.mbu.ltd:443`(即 `wss://nats.dprox.mbu.ltd`)。
+> 想让手机走标准 **443**:用现有 nginx 反代 `wss` 到 NATS(需把 NATS websocket 改 `no_tls` 内网端口);或把 `WS_PORT=443`(若 443 空闲)。
 
 ---
 
-## 部署方式与开机自启(三选一)
+## 跑完之后(桌面 + 手机)
 
-- **systemd(推荐)**:见 A5;`systemctl enable --now nats` 即**开机自启**。
-- **pm2**:
-  ```bash
-  npm i -g pm2
-  pm2 start /usr/local/bin/nats-server --name nats -- -c /etc/nats/nats-server.conf
-  pm2 save          # 记住当前进程
-  pm2 startup       # 按提示执行它打印的一条 sudo 命令 → 开机自启
-  ```
-- **Docker**(`--restart unless-stopped` 即开机自启,需 docker 服务自身已 enable):
-  ```bash
-  docker run -d --name nats --restart unless-stopped \
-    -p 4222:4222 -p 8443:8443 -v /etc/nats:/etc/nats nats:2.14 -c /etc/nats/nats-server.conf
-  ```
-
----
-
-## A. 一次性:服务器与账号(只做一次)
-
-### A1. 安装组件
-```bash
-# nats-server
-VER=v2.14.2; ARCH=amd64   # arm64 视架构
-curl -L -o /tmp/n.tar.gz "https://github.com/nats-io/nats-server/releases/download/${VER}/nats-server-${VER}-linux-${ARCH}.tar.gz"
-tar -xzf /tmp/n.tar.gz -C /tmp && sudo install /tmp/nats-server-*/nats-server /usr/local/bin/nats-server
-
-# nsc(凭据管理)与 nats(CLI 自测)
-curl -L https://github.com/nats-io/nsc/releases/latest/download/nsc-linux-amd64.zip -o /tmp/nsc.zip && sudo unzip -o /tmp/nsc.zip -d /usr/local/bin
-curl -sf https://binaries.nats.dev/nats-io/natscli/nats@latest | sh && sudo install nats /usr/local/bin/nats
-```
-
-### A2. TLS 证书
-```bash
-# 有域名(推荐)
-sudo apt install -y certbot && sudo certbot certonly --standalone -d nats.your-domain.com
-# 证书: /etc/letsencrypt/live/nats.your-domain.com/{fullchain,privkey}.pem
-```
-（无域名可自签,但客户端需信任该 CA;生产用 Let's Encrypt。）
-
-### A3. 用 nsc 建 operator / SYS / APP 账号 + 签名密钥
-```bash
-nsc add operator --generate-signing-key --sys --name DP
-nsc edit operator --require-signing-keys --account-jwt-server-url "nats://127.0.0.1:4222"
-
-nsc add account APP
-nsc edit account APP --sk generate        # 给 APP 生成一个“签名密钥”(用于签发用户 JWT)
-```
-
-**(可选但推荐)把签名密钥设为"作用域(scoped)",强制把签出的用户限制在 `dp.>`**——即使桌面上的签名密钥泄露,也只能签发被限制在 `dp.>` 的用户:
-```bash
-SK=$(nsc describe account APP -J | jq -r '.nats.signing_keys[0].key // .nats.signing_keys[0]')
-nsc edit signing-key --account APP --sk "$SK" --role dpdevice \
-  --allow-pub "dp.>" --allow-sub "dp.>" --allow-pub "_INBOX.>" --allow-sub "_INBOX.>"
-```
-
-### A4. 生成服务器配置(operator + SYS + nats-resolver)
-```bash
-sudo mkdir -p /etc/nats/jwt
-nsc generate config --nats-resolver --sys-account SYS | sudo tee /etc/nats/resolver.conf >/dev/null
-# 把 resolver.conf 里的 dir 指到可写目录,例如 /etc/nats/jwt(若未自动写入)
-```
-
-`/etc/nats/nats-server.conf`:
-```hocon
-host: "0.0.0.0"
-port: 4222
-tls {
-  cert_file: "/etc/letsencrypt/live/nats.your-domain.com/fullchain.pem"
-  key_file:  "/etc/letsencrypt/live/nats.your-domain.com/privkey.pem"
-}
-websocket {                      # 给浏览器/部分手机栈(wss)
-  port: 8443
-  tls {
-    cert_file: "/etc/letsencrypt/live/nats.your-domain.com/fullchain.pem"
-    key_file:  "/etc/letsencrypt/live/nats.your-domain.com/privkey.pem"
-  }
-}
-include "resolver.conf"          # operator + SYS + nats-resolver(A4 生成)
-max_payload: 8MB
-```
-
-### A5. systemd 常驻 + 防火墙 + 推送账号
-```bash
-sudo tee /etc/systemd/system/nats.service >/dev/null <<'EOF'
-[Unit]
-Description=NATS Server
-After=network-online.target
-Wants=network-online.target
-[Service]
-ExecStart=/usr/local/bin/nats-server -c /etc/nats/nats-server.conf
-Restart=always
-RestartSec=2
-LimitNOFILE=100000
-[Install]
-WantedBy=multi-user.target
-EOF
-sudo systemctl daemon-reload && sudo systemctl enable --now nats
-sudo ufw allow 4222/tcp && sudo ufw allow 8443/tcp
-
-# 把 operator/APP 账号 JWT 推送到运行中的 resolver(以后改账号才需要再 push)
-nsc push -A
-```
-
-### A6. 取出桌面要用的两样东西
-desktop-proxy 桌面端需要 **APP 账号签名密钥的 SEED** 和 **APP 账号的公钥 ID**:
-```bash
-# APP 账号公钥 ID(issuer_account, A 开头)
-nsc describe account APP -J | jq -r '.sub'
-
-# APP 签名密钥的公钥(A 开头,与上面不同)
-SKPUB=$(nsc describe account APP -J | jq -r '.nats.signing_keys[0].key // .nats.signing_keys[0]')
-echo "$SKPUB"
-
-# 该签名密钥的 SEED(SA 开头)——在 nsc 密钥库里:
-cat "$(nsc env -J | jq -r '.stores')/../keys/keys/${SKPUB:0:1}/${SKPUB:1:2}/${SKPUB}.nk" 2>/dev/null \
-  || find ~/.local/share/nats/nsc -name "${SKPUB}.nk" -exec cat {} \;
-```
-> 记下:`accountId = APP 账号公钥 ID(sub)`、`accountSeed = 签名密钥 SEED(SA...)`。**SEED 是敏感凭据,妥善保管。**
-
-至此**服务器侧全部完成,以后不用再动**。
-
----
-
-## B. 桌面端接入(每台桌面一次,无需登服务器)
-
-编辑 `~/.desktop-proxy/config.json`:
+脚本结尾打印 `remote` 块(也存 `~/desktop-proxy-remote.json`),例如:
 ```json
-{
-  "remote": {
-    "enabled": true,
-    "url": "tls://nats.your-domain.com:4222",
-    "accountSeed": "SA...(A6 的签名密钥 SEED)",
-    "accountId": "A...(A6 的 APP 账号公钥 ID)"
-  }
-}
+{ "remote": { "enabled": true, "url": "tls://nats.your-domain.com:4222",
+  "accountSeed": "SA...", "accountId": "A..." } }
 ```
-- `url`:原生 App/桌面用 `tls://...:4222`;走 WebSocket 用 `wss://nats.your-domain.com:8443`。
-- **自签证书**时,把服务器的 `cert.pem` 拷到桌面,并加 `"caFile": "/path/to/cert.pem"` 让桌面信任它(Let's Encrypt 域名证书则不需要)。
-- 重启被注入的 app。桌面会**本地签发 hub 凭据**并连上(日志 `~/.desktop-proxy/log/main.log` 出现 `remote bus connected`)。`instanceId` 会自动生成并写入 config。
-
-> 多台桌面:把同样的 `accountSeed/accountId/url` 填进各自的 config 即可;每台自动用各自 `instanceId` 隔离主题。**不需要在服务器加任何用户。**
+- 粘进每台桌面的 `~/.desktop-proxy/config.json` → 重启被注入的 app(日志 `~/.desktop-proxy/log/main.log` 出现 `remote bus connected`)。
+- 自签证书时额外加 `"caFile": "<服务器 cert.pem 拷到桌面后的路径>"`。
+- 手机:桌面运行 `dprox pair` 出二维码扫码即接入(**本地现签**设备凭据,不碰服务器)。
 
 ---
 
-## C. 配对手机(每台手机一次,无需登服务器)
+## 重复执行 / 管理
 
-```bash
-desktop-proxy pair --name "我的 Mac"
-```
-- JWT 模式下,这会**本地现签**一个仅限本实例 `dp.<instanceId>.*` 的 device JWT,打印二维码 + `desktopproxy://pair?d=...`。手机原生 App 扫码即接入。
-- 每扫一次都是一份新的设备凭据;**全程不碰服务器。**
-
----
-
-## D. 自测(可选,用 NATS CLI 验证连通与 ACL)
-```bash
-# 用 APP 签名密钥临时签一个用户做测试,或直接观察桌面连接日志。
-nats --server tls://nats.your-domain.com:4222 --creds <某 .creds> rtt
-```
+- **幂等**:可随时重跑同一命令——已有账号/密钥**复用不变**(已配对设备继续有效),容器替换重启。
+- 管理:`docker logs nats`(日志)、`docker ps`(状态)、`docker restart nats`、`docker rm -f nats`(删)。
+- 升级镜像:`NATS_IMAGE=nats:2.11 ... bash nats-setup.sh` 或 `docker pull nats:latest && docker restart nats`。
 
 ---
 
 ## 安全须知
-- `accountSeed` = 签发权限,**勿外泄**;泄露时在 nsc 里轮换 APP 签名密钥并 `nsc push -A`,旧桌面需更新 config。
-- 用了**作用域签名密钥**(A3 可选步骤)时,即使 seed 泄露,签出的用户也被限制在 `dp.>`,影响面最小。
-- 传输 TLS 加密;NATS(你的服务器)中间可见明文——服务器是你自己的,符合既定取舍。需"零知识中继"时可在 payload 上叠应用层 E2E(后续可选)。
-- `remote.enabled=false`(默认)时桌面不连 NATS、不开任何端口。
-
----
-
-## 静态回退(可选,不想用 nsc 时)
-若暂不想用 JWT,可用静态 user/pass:在 `nats-server.conf` 的 `authorization.users` 里按 `dp.<ID>.*` 手动建 `hub_<ID>/dev_<ID>` 两用户(每台桌面都要加,**非零操作**),桌面 config 用 `remote.user/pass/deviceUser/devicePass`。详见本仓库历史版本;推荐还是用上面的 JWT 模式。
+- `accountSeed` = 签发权限,**勿外泄**;泄露则在 nsc 轮换 APP 签名密钥后重跑脚本。
+- 传输 TLS 加密;NATS(你的服务器)中间可见明文——服务器是你自己的,符合既定取舍。
+- `remote.enabled=false`(默认)时桌面不连 NATS。
+- 云服务器记得在**安全组**也放行 `4222`/`8443`。

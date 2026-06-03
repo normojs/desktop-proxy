@@ -1,34 +1,37 @@
 #!/usr/bin/env bash
 #
-# One-click NATS server setup for the desktop-proxy remote bus.
+# One-click NATS server setup for the desktop-proxy remote bus — Docker only.
 #
-# Online install (run on the SERVER as root or with sudo):
+# Online install (on the SERVER, as root or with sudo):
 #   curl -fsSL https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh -o nats-setup.sh
-#   sudo DOMAIN=nats.example.com TLS=letsencrypt PM=systemd bash nats-setup.sh
-#   # quick self-signed test (no domain):
-#   curl -fsSL https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh | sudo bash
+#   sudo DOMAIN=nats.example.com TLS=letsencrypt bash nats-setup.sh
+#   # already have nginx/cert:
+#   sudo TLS=existing DOMAIN=nats.example.com \
+#        CERT_FILE=/etc/letsencrypt/live/nats.example.com/fullchain.pem \
+#        KEY_FILE=/etc/letsencrypt/live/nats.example.com/privkey.pem bash nats-setup.sh
 #
-# It installs nats-server + nsc, makes a TLS cert, configures decentralized JWT
-# auth (operator/SYS/APP + nats-resolver), enables autostart, opens the firewall,
-# and PRINTS the values to paste into each desktop's ~/.desktop-proxy/config.json.
-# After this, adding desktops/phones needs NO further server operation.
+# Runs nats-server in Docker (--restart unless-stopped = boot autostart), TLS via
+# your cert, decentralized JWT accounts (MEMORY resolver, no push). Prints the
+# `remote` block to paste into each desktop's ~/.desktop-proxy/config.json.
+# After this, adding desktops/phones needs NO server operation.
 #
-# Vars: DOMAIN(optional) TLS=letsencrypt|selfsigned(default) PM=systemd|pm2|docker(default systemd)
-#       PORT(4222) WS_PORT(8443) VER(nats-server ver) NATS_DIR(/etc/nats)
-#       SKIP_NSC=1 skip account automation; FORCE_INSTALL=1 re-download binaries
-# China network helpers:
-#       PROXY=http://127.0.0.1:7890   route downloads through a proxy
-#       GH_MIRROR=https://ghproxy.com/  prefix for github.com downloads (note trailing /)
-# Safe to re-run (idempotent): existing nats-server/nsc accounts are reused.
+# Vars: DOMAIN(optional) TLS=letsencrypt|selfsigned(default)|existing  PORT(4222) WS_PORT(8443)
+#       CERT_FILE/KEY_FILE (TLS=existing)  NATS_IMAGE(nats:latest)  NATS_DIR(/etc/nats)
+#       SKIP_NSC=1
+# China network:
+#       PROXY=http://127.0.0.1:7890          proxy for downloads + Docker install
+#       GH_MIRROR=https://ghfast.top/          GitHub mirror prefix (for nsc download)
+#       DOCKER_MIRROR=https://docker.m.daocloud.io   Docker registry mirror (image pull)
+#       DOCKER_INSTALL_MIRROR=Aliyun          mirror for installing Docker itself
+# Safe to re-run (idempotent): reuses existing accounts/keys and the container.
 
 set -euo pipefail
-
-# Binaries install to /usr/local/bin — ensure it's on PATH (RHEL/sudo shells often omit it).
 export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
 
-TLS="${TLS:-selfsigned}"; PM="${PM:-systemd}"; PORT="${PORT:-4222}"; WS_PORT="${WS_PORT:-8443}"
-VER="${VER:-v2.14.1}"; NATS_DIR="${NATS_DIR:-/etc/nats}"; DOMAIN="${DOMAIN:-}"; SKIP_NSC="${SKIP_NSC:-0}"
-PROXY="${PROXY:-}"; GH_MIRROR="${GH_MIRROR:-}"; FORCE_INSTALL="${FORCE_INSTALL:-0}"
+TLS="${TLS:-selfsigned}"; PORT="${PORT:-4222}"; WS_PORT="${WS_PORT:-8443}"
+NATS_DIR="${NATS_DIR:-/etc/nats}"; DOMAIN="${DOMAIN:-}"; SKIP_NSC="${SKIP_NSC:-0}"
+NATS_IMAGE="${NATS_IMAGE:-nats:latest}"
+PROXY="${PROXY:-}"; GH_MIRROR="${GH_MIRROR:-}"; DOCKER_MIRROR="${DOCKER_MIRROR:-}"; DOCKER_INSTALL_MIRROR="${DOCKER_INSTALL_MIRROR:-}"
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 HOST_ADDR="${DOMAIN:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 
@@ -39,111 +42,86 @@ CURL_OPTS=(-fL --retry 3 --retry-delay 2 --connect-timeout 20)
 [ -n "$PROXY" ] && CURL_OPTS+=(--proxy "$PROXY")
 ghurl() { case "$1" in https://github.com/*|https://raw.githubusercontent.com/*) echo "${GH_MIRROR}$1";; *) echo "$1";; esac; }
 DEFAULT_MIRRORS=("https://ghfast.top/" "https://ghproxy.net/" "https://gh-proxy.com/")
-dl() { # dl <url> <out>; tries direct (or GH_MIRROR), then auto-falls back to mirrors for github URLs
-  local raw="$1" out="$2"
-  say "Downloading $(ghurl "$raw")"
+dl() { local raw="$1" out="$2"; say "Downloading $(ghurl "$raw")"
   curl "${CURL_OPTS[@]}" --progress-bar -o "$out" "$(ghurl "$raw")" && return 0
   if [ -z "$GH_MIRROR" ]; then case "$raw" in https://github.com/*|https://raw.githubusercontent.com/*)
-    for m in "${DEFAULT_MIRRORS[@]}"; do
-      say "Direct download failed — retry via mirror ${m}"
-      curl "${CURL_OPTS[@]}" --progress-bar -o "$out" "${m}${raw}" && return 0
-    done;; esac
-  fi
-  return 1
-}
+    for m in "${DEFAULT_MIRRORS[@]}"; do say "Retry via mirror ${m}"; curl "${CURL_OPTS[@]}" --progress-bar -o "$out" "${m}${raw}" && return 0; done;; esac
+  fi; return 1; }
 
-# ── package manager (apt/dnf/yum/zypper/pacman/apk) + dependency installer ────
+# package manager for host deps (jq/unzip/openssl/nsc)
 PM_INSTALL=""; APT_UPDATED=0
 if   need apt-get; then PM_INSTALL="apt-get install -y"
 elif need dnf;     then PM_INSTALL="dnf install -y"
 elif need yum;     then PM_INSTALL="yum install -y"
 elif need zypper;  then PM_INSTALL="zypper install -y"
 elif need pacman;  then PM_INSTALL="pacman -S --noconfirm"
-elif need apk;     then PM_INSTALL="apk add --no-cache"
-fi
-pkg_install() {
-  [ -n "$PM_INSTALL" ] || { echo "!! No supported package manager. Please install manually: $*"; return 1; }
+elif need apk;     then PM_INSTALL="apk add --no-cache"; fi
+pkg_install() { [ -n "$PM_INSTALL" ] || { echo "!! No package manager; install manually: $*"; return 1; }
   if [ "${PM_INSTALL%% *}" = "apt-get" ] && [ "$APT_UPDATED" = "0" ]; then $SUDO apt-get update -y >/dev/null 2>&1 || true; APT_UPDATED=1; fi
-  $SUDO $PM_INSTALL "$@"
-}
-ensure() { # ensure <command> [package]
-  local cmd="$1" pkg="${2:-$1}"
-  need "$cmd" && return 0
-  say "Installing dependency: $pkg"
-  pkg_install "$pkg" || { echo "!! Could not auto-install '$pkg'. Install it and re-run."; exit 1; }
-  need "$cmd" || { echo "!! '$cmd' still missing after install."; exit 1; }
-}
+  $SUDO $PM_INSTALL "$@"; }
+ensure() { local cmd="$1" pkg="${2:-$1}"; need "$cmd" && return 0
+  say "Installing dependency: $pkg"; pkg_install "$pkg" || { echo "!! Could not auto-install '$pkg'."; exit 1; }
+  need "$cmd" || { echo "!! '$cmd' still missing."; exit 1; }; }
 
-say "desktop-proxy NATS one-click setup (TLS=$TLS, PM=$PM, host=$HOST_ADDR${PROXY:+, proxy=$PROXY}${GH_MIRROR:+, mirror=$GH_MIRROR})"
-if [ -n "$PM_INSTALL" ]; then say "Package manager: ${PM_INSTALL%% *}"; else say "No package manager detected — ensure curl/tar/unzip/jq/openssl are preinstalled"; fi
+say "desktop-proxy NATS (Docker) setup — TLS=$TLS, host=$HOST_ADDR${PROXY:+, proxy=$PROXY}${DOCKER_MIRROR:+, registry=$DOCKER_MIRROR}"
 
-# ── 1. dependencies + nats-server + nsc ──────────────────────────────────────
-ensure curl; ensure tar
-if [ "$PM" = "docker" ]; then
-  say "PM=docker — NATS runs from the official image; skipping host binary install"
-elif ! need nats-server || [ "$FORCE_INSTALL" = "1" ]; then
-  say "Installing nats-server $VER"
-  TMP="$(mktemp -d)"
-  dl "https://github.com/nats-io/nats-server/releases/download/${VER}/nats-server-${VER}-linux-$(arch).tar.gz" "$TMP/n.tgz" \
-    || { echo "!! nats-server download failed — retry with PROXY=http://host:port or GH_MIRROR=https://ghfast.top/"; exit 1; }
-  tar -xzf "$TMP/n.tgz" -C "$TMP" 2>/dev/null \
-    || { echo "!! extract failed — the download isn't a valid tarball (a mirror may have returned an error page). Try another GH_MIRROR= or PROXY=, or set VER= to a valid release."; exit 1; }
-  BIN="$(find "$TMP" -type f -name nats-server | head -1)"
-  [ -n "$BIN" ] || { echo "!! nats-server binary not found inside the archive"; exit 1; }
-  $SUDO install "$BIN" /usr/local/bin/nats-server
-  rm -rf "$TMP"
-else
-  say "nats-server present ($(nats-server --version 2>/dev/null)); FORCE_INSTALL=1 to reinstall"
+# ── 1. host deps + nsc ───────────────────────────────────────────────────────
+ensure curl
+[ "$SKIP_NSC" = "1" ] || { ensure jq; ensure unzip; }
+if [ "$SKIP_NSC" != "1" ] && ! need nsc; then
+  say "Installing nsc"
+  dl "https://github.com/nats-io/nsc/releases/latest/download/nsc-linux-$(arch).zip" /tmp/nsc.zip \
+    || { echo "!! nsc download failed — set GH_MIRROR=https://ghfast.top/ or PROXY=..."; exit 1; }
+  $SUDO unzip -o /tmp/nsc.zip -d /usr/local/bin >/dev/null || { echo "!! nsc unzip failed (bad download?)"; exit 1; }
+  { [ -x /usr/local/bin/nsc ] || need nsc; } || { echo "!! nsc not installed"; exit 1; }
 fi
-[ "$PM" = "docker" ] || { [ -x /usr/local/bin/nats-server ] || need nats-server; } || { echo "!! nats-server not installed"; exit 1; }
 
-if [ "$SKIP_NSC" != "1" ]; then
-  ensure jq; ensure unzip
-  if ! need nsc || [ "$FORCE_INSTALL" = "1" ]; then
-    say "Installing nsc"
-    dl "https://github.com/nats-io/nsc/releases/latest/download/nsc-linux-$(arch).zip" /tmp/nsc.zip \
-      || { echo "!! nsc download failed — retry with PROXY=... or GH_MIRROR=https://ghfast.top/"; exit 1; }
-    $SUDO unzip -o /tmp/nsc.zip -d /usr/local/bin >/dev/null \
-      || { echo "!! nsc unzip failed — the download isn't a valid zip (mirror returned an error page?). Try another GH_MIRROR=/PROXY=."; exit 1; }
+# ── 2. Docker (install + registry mirror + pull) ─────────────────────────────
+if ! need docker; then
+  say "Installing Docker (get.docker.com${DOCKER_INSTALL_MIRROR:+ --mirror $DOCKER_INSTALL_MIRROR})"
+  curl "${CURL_OPTS[@]}" -o /tmp/get-docker.sh https://get.docker.com || { echo "!! could not fetch Docker installer (set PROXY=...)"; exit 1; }
+  GA=(); [ -n "$DOCKER_INSTALL_MIRROR" ] && GA+=(--mirror "$DOCKER_INSTALL_MIRROR")
+  if [ ${#GA[@]} -gt 0 ]; then $SUDO sh /tmp/get-docker.sh "${GA[@]}"; else $SUDO sh /tmp/get-docker.sh; fi
+fi
+need docker || { echo "!! Docker not available — install manually then re-run."; exit 1; }
+$SUDO systemctl enable --now docker >/dev/null 2>&1 || $SUDO service docker start >/dev/null 2>&1 || true
+if [ -n "$DOCKER_MIRROR" ]; then
+  say "Setting Docker registry mirror: $DOCKER_MIRROR"
+  $SUDO mkdir -p /etc/docker
+  if need jq && [ -s /etc/docker/daemon.json ]; then
+    TMPJ="$(mktemp)"; jq --arg m "$DOCKER_MIRROR" '. + {"registry-mirrors":[$m]}' /etc/docker/daemon.json >"$TMPJ" 2>/dev/null && $SUDO cp "$TMPJ" /etc/docker/daemon.json; rm -f "$TMPJ"
+  else
+    echo "{\"registry-mirrors\":[\"$DOCKER_MIRROR\"]}" | $SUDO tee /etc/docker/daemon.json >/dev/null
   fi
-  { [ -x /usr/local/bin/nsc ] || need nsc; } || { echo "!! nsc not installed (is /usr/local/bin writable?)"; exit 1; }
+  $SUDO systemctl restart docker >/dev/null 2>&1 || $SUDO service docker restart >/dev/null 2>&1 || true
+  sleep 2
 fi
+say "Pulling $NATS_IMAGE"
+$SUDO docker pull "$NATS_IMAGE" || { echo "!! image pull failed — set DOCKER_MIRROR=https://docker.m.daocloud.io (or your registry mirror) and re-run."; exit 1; }
 
 $SUDO mkdir -p "$NATS_DIR/tls" "$NATS_DIR/jwt"
 
-# ── 2. TLS cert ──────────────────────────────────────────────────────────────
+# ── 3. TLS cert ──────────────────────────────────────────────────────────────
 CERT="$NATS_DIR/tls/cert.pem"; KEY="$NATS_DIR/tls/key.pem"
 if [ "$TLS" = "existing" ]; then
-  # Reuse a cert you already obtained (recommended when the box already runs
-  # nginx/web on 80/443 — no standalone, no conflict). Set CERT_FILE + KEY_FILE.
   CERT="${CERT_FILE:?TLS=existing requires CERT_FILE=/path/fullchain.pem}"
   KEY="${KEY_FILE:?TLS=existing requires KEY_FILE=/path/privkey.pem}"
   { [ -f "$CERT" ] && [ -f "$KEY" ]; } || { echo "CERT_FILE/KEY_FILE not found"; exit 1; }
   say "Using existing certificate $CERT"
 elif [ "$TLS" = "letsencrypt" ]; then
   [ -n "$DOMAIN" ] || { echo "letsencrypt requires DOMAIN=..."; exit 1; }
-  say "Obtaining cert for $DOMAIN — needs DNS A record → this server and port 80 reachable"
-  say "NOTE: --standalone needs port 80 FREE. If nginx/web uses 80, stop it briefly or use TLS=existing instead."
-  need ufw && { $SUDO ufw allow 80/tcp >/dev/null 2>&1 || true; }
-  ensure certbot   # on RHEL/CentOS this may need EPEL: sudo dnf install -y epel-release
-  # --keep-until-expiring makes re-runs reuse the existing cert (no rate-limit hit).
+  say "Obtaining cert for $DOMAIN (needs DNS A record → here + port 80 free)"
+  ensure certbot
   $SUDO certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos -m "admin@$DOMAIN" --keep-until-expiring
   CERT="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"; KEY="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
 else
   ensure openssl
   say "Generating self-signed cert for $HOST_ADDR"
   SAN=$([ -n "$DOMAIN" ] && echo "DNS:$DOMAIN" || echo "IP:$HOST_ADDR")
-  $SUDO openssl req -x509 -newkey rsa:2048 -nodes -keyout "$KEY" -out "$CERT" -days 825 \
-    -subj "/CN=$HOST_ADDR" -addext "subjectAltName=$SAN"
-  # Trust the self-signed CA system-wide so `nsc push` (TLS) validates.
-  if [ -d /etc/pki/ca-trust/source/anchors ]; then
-    $SUDO cp "$CERT" /etc/pki/ca-trust/source/anchors/dp-nats.crt && $SUDO update-ca-trust extract >/dev/null 2>&1 || true
-  elif [ -d /usr/local/share/ca-certificates ]; then
-    $SUDO cp "$CERT" /usr/local/share/ca-certificates/dp-nats.crt && $SUDO update-ca-certificates >/dev/null 2>&1 || true
-  fi
+  $SUDO openssl req -x509 -newkey rsa:2048 -nodes -keyout "$KEY" -out "$CERT" -days 825 -subj "/CN=$HOST_ADDR" -addext "subjectAltName=$SAN"
 fi
 
-# ── 3. base server config ────────────────────────────────────────────────────
+# ── 4. server config ─────────────────────────────────────────────────────────
 say "Writing $NATS_DIR/nats-server.conf"
 $SUDO tee "$NATS_DIR/nats-server.conf" >/dev/null <<EOF
 host: "0.0.0.0"
@@ -155,123 +133,68 @@ include "resolver.conf"
 EOF
 [ -f "$NATS_DIR/resolver.conf" ] || echo "# placeholder until nsc generates it" | $SUDO tee "$NATS_DIR/resolver.conf" >/dev/null
 
-# ── 4. decentralized JWT accounts (nsc) ──────────────────────────────────────
+# ── 5. decentralized JWT accounts (MEMORY resolver, no push) ──────────────────
 ACCOUNT_ID=""; ACCOUNT_SEED=""
 if [ "$SKIP_NSC" != "1" ]; then
-  say "Configuring decentralized JWT (operator/SYS/APP + nats-resolver)"
+  say "Configuring decentralized JWT (operator/SYS/APP + MEMORY resolver)"
   export NKEYS_PATH="${NKEYS_PATH:-$HOME/.local/share/nats/nsc/keys}"
-  # Idempotent: only create operator/account if missing, so re-runs keep the
-  # SAME keys (existing desktops/phones stay valid).
   nsc describe operator DP >/dev/null 2>&1 || nsc add operator --generate-signing-key --sys --name DP
   nsc edit operator --require-signing-keys >/dev/null 2>&1 || true
   nsc describe account APP >/dev/null 2>&1 || nsc add account APP
   SKN="$(nsc describe account APP -J 2>/dev/null | jq -r '(.nats.signing_keys // []) | length')"
   [ "${SKN:-0}" -ge 1 ] || nsc edit account APP --sk generate
-  # MEMORY resolver embeds the account JWTs directly in the server config — NO
-  # network push needed (avoids the TLS-to-127.0.0.1 problem). New USERS are
-  # minted locally by the desktop and validated against this account, so adding
-  # desktops/phones still needs zero server ops.
   nsc generate config --mem-resolver --sys-account SYS | $SUDO tee "$NATS_DIR/resolver.conf" >/dev/null
 fi
 
-# ── 5. autostart ─────────────────────────────────────────────────────────────
-start_systemd() {
-  $SUDO tee /etc/systemd/system/nats.service >/dev/null <<EOF
-[Unit]
-Description=NATS Server (desktop-proxy)
-After=network-online.target
-Wants=network-online.target
-[Service]
-ExecStart=/usr/local/bin/nats-server -c $NATS_DIR/nats-server.conf
-Restart=always
-RestartSec=2
-LimitNOFILE=100000
-[Install]
-WantedBy=multi-user.target
-EOF
-  $SUDO systemctl daemon-reload; $SUDO systemctl enable --now nats; $SUDO systemctl restart nats
-}
-start_pm2() {
-  need pm2 || $SUDO npm install -g pm2
-  pm2 delete nats >/dev/null 2>&1 || true
-  pm2 start /usr/local/bin/nats-server --name nats -- -c "$NATS_DIR/nats-server.conf"
-  pm2 save; pm2 startup | tail -1 || true
-}
-start_docker() {
-  if ! need docker; then
-    say "Installing Docker (get.docker.com)"
-    if [ -n "$PROXY" ]; then curl -fsSL --proxy "$PROXY" https://get.docker.com | $SUDO sh; else curl -fsSL https://get.docker.com | $SUDO sh; fi
-  fi
-  need docker || { echo "!! Docker not available — install it manually then re-run."; exit 1; }
-  $SUDO systemctl enable --now docker >/dev/null 2>&1 || true   # daemon boot autostart
-  # Mount cert dirs so the container can read them (run as root to read 600 keys).
-  local mounts=(-v "$NATS_DIR:$NATS_DIR")
-  case "$CERT" in
-    "$NATS_DIR"/*) : ;;                                                   # self-signed under NATS_DIR
-    /etc/letsencrypt/*) mounts+=(-v "/etc/letsencrypt:/etc/letsencrypt:ro") ;;
-    *) mounts+=(-v "$(dirname "$CERT"):$(dirname "$CERT"):ro") ;;
-  esac
-  $SUDO docker rm -f nats >/dev/null 2>&1 || true
-  $SUDO docker run -d --name nats --restart unless-stopped -u 0:0 \
-    -p "$PORT:$PORT" -p "$WS_PORT:$WS_PORT" "${mounts[@]}" \
-    nats:2.14 -c "$NATS_DIR/nats-server.conf"
-}
-say "Starting nats-server via $PM (boot autostart)"
-case "$PM" in systemd) start_systemd;; pm2) start_pm2;; docker) start_docker;; *) echo "bad PM=$PM"; exit 1;; esac
+# ── 6. run the container (boot autostart) ────────────────────────────────────
+say "Starting nats container (restart=unless-stopped → boot autostart)"
+MOUNTS=(-v "$NATS_DIR:$NATS_DIR")
+case "$CERT" in
+  "$NATS_DIR"/*) : ;;
+  /etc/letsencrypt/*) MOUNTS+=(-v "/etc/letsencrypt:/etc/letsencrypt:ro") ;;
+  *) MOUNTS+=(-v "$(dirname "$CERT"):$(dirname "$CERT"):ro") ;;
+esac
+$SUDO docker rm -f nats >/dev/null 2>&1 || true
+$SUDO docker run -d --name nats --restart unless-stopped -u 0:0 \
+  -p "$PORT:$PORT" -p "$WS_PORT:$WS_PORT" "${MOUNTS[@]}" \
+  "$NATS_IMAGE" -c "$NATS_DIR/nats-server.conf"
+sleep 2
+$SUDO docker ps --filter name=nats --format '   {{.Names}}  {{.Status}}  {{.Ports}}' || true
 
-# ── 6. firewall (ufw or firewalld) ───────────────────────────────────────────
-if need ufw; then
-  $SUDO ufw allow "$PORT/tcp" >/dev/null 2>&1 || true
-  $SUDO ufw allow "$WS_PORT/tcp" >/dev/null 2>&1 || true
-elif need firewall-cmd; then
-  $SUDO firewall-cmd --permanent --add-port="$PORT/tcp" >/dev/null 2>&1 || true
-  $SUDO firewall-cmd --permanent --add-port="$WS_PORT/tcp" >/dev/null 2>&1 || true
-  $SUDO firewall-cmd --reload >/dev/null 2>&1 || true
-else
-  say "No ufw/firewalld detected — make sure ports $PORT and $WS_PORT are open (also in your cloud security group)."
-fi
+# ── 7. firewall ──────────────────────────────────────────────────────────────
+if need ufw; then $SUDO ufw allow "$PORT/tcp" >/dev/null 2>&1 || true; $SUDO ufw allow "$WS_PORT/tcp" >/dev/null 2>&1 || true
+elif need firewall-cmd; then $SUDO firewall-cmd --permanent --add-port="$PORT/tcp" >/dev/null 2>&1 || true; $SUDO firewall-cmd --permanent --add-port="$WS_PORT/tcp" >/dev/null 2>&1 || true; $SUDO firewall-cmd --reload >/dev/null 2>&1 || true
+else say "No ufw/firewalld — open ports $PORT and $WS_PORT (also in your cloud security group)."; fi
 
-# ── 7. push accounts + extract desktop credentials ───────────────────────────
+# ── 8. extract creds + summary ───────────────────────────────────────────────
 if [ "$SKIP_NSC" != "1" ]; then
-  # No `nsc push` needed: the MEMORY resolver already embedded the accounts in
-  # the config that the server loaded on (re)start. Just extract the creds.
   set +e
   ACCOUNT_ID="$(nsc describe account APP -J 2>/dev/null | jq -r '.sub // empty')"
-  # signing_keys[0] may be a plain string or an object {key:...} depending on nsc version.
   SK_PUB="$(nsc describe account APP -J 2>/dev/null | jq -r '(.nats.signing_keys[0] | if type=="object" then .key else . end) // empty')"
-  if [ -n "$SK_PUB" ]; then
-    NK="$(find "${NKEYS_PATH:-$HOME/.local/share/nats/nsc/keys}" -name "${SK_PUB}.nk" 2>/dev/null | head -1)"
-    [ -n "$NK" ] && ACCOUNT_SEED="$(cat "$NK" 2>/dev/null)"
-  fi
+  if [ -n "$SK_PUB" ]; then NK="$(find "${NKEYS_PATH:-$HOME/.local/share/nats/nsc/keys}" -name "${SK_PUB}.nk" 2>/dev/null | head -1)"; [ -n "$NK" ] && ACCOUNT_SEED="$(cat "$NK" 2>/dev/null)"; fi
   set -e
 fi
 
-# ── 8. summary ───────────────────────────────────────────────────────────────
-URL="tls://${HOST_ADDR}:${PORT}"
-SUMMARY="$HOME/desktop-proxy-remote.json"
+URL="tls://${HOST_ADDR}:${PORT}"; SUMMARY="$HOME/desktop-proxy-remote.json"
 {
-  echo "{"
-  echo "  \"remote\": {"
-  echo "    \"enabled\": true,"
-  echo "    \"url\": \"$URL\","
+  echo "{"; echo "  \"remote\": {"; echo "    \"enabled\": true,"; echo "    \"url\": \"$URL\","
   [ -n "$ACCOUNT_SEED" ] && echo "    \"accountSeed\": \"$ACCOUNT_SEED\","
   [ -n "$ACCOUNT_ID" ]   && echo "    \"accountId\": \"$ACCOUNT_ID\""
-  [ "$TLS" = "selfsigned" ] && echo "    , \"caFile\": \"<copy $CERT onto the desktop and put its path here>\""
-  echo "  }"
-  echo "}"
+  [ "$TLS" = "selfsigned" ] && echo "    , \"caFile\": \"<copy $CERT onto the desktop, set its path here>\""
+  echo "  }"; echo "}"
 } | tee "$SUMMARY"
 
 cat <<EOF
 
-==> Done. NATS is running with autostart ($PM), TLS=$TLS.
+==> Done. NATS runs in Docker with boot autostart (TLS=$TLS).
     Paste the "remote" block above into each desktop's ~/.desktop-proxy/config.json,
-    restart the app, then run "desktop-proxy pair" on the desktop to add a phone.
-    (Saved to $SUMMARY)
+    restart the app, then run "dprox pair" on the desktop to add a phone.
+    (Saved to $SUMMARY)   Logs: docker logs nats   Status: docker ps
 EOF
 if [ "$SKIP_NSC" != "1" ] && { [ -z "$ACCOUNT_ID" ] || [ -z "$ACCOUNT_SEED" ]; }; then
   cat <<'EOF'
 
-!! Could not auto-extract account credentials (nsc version differences). Get them manually:
+!! Could not auto-extract account credentials. Get them manually:
    accountId:   nsc describe account APP -J | jq -r .sub
    signingKey:  nsc describe account APP -J | jq -r '.nats.signing_keys[0] | if type=="object" then .key else . end'
    accountSeed: find ~/.local/share/nats/nsc/keys -name "<signingKey>.nk" -exec cat {} \;
