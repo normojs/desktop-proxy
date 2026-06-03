@@ -61,7 +61,7 @@ re-sign/permissions stay guarded in the install pipeline.
 |---|---|---|---|---|
 | **Codex** | native Rust core (`codex app-server`) | asar (UI/observe) | **config-redirect** → relay (`~/.codex/config.toml` + `auth.json`, `wire_api=responses`) | Fully working incl. **Responses↔chat translation**, model rewrite, login bypass, coding agent. |
 | **Cursor** | in-process (Electron renderer / Node) | asar | **in-process** intercept / `raceRequest` | Traffic is HTTP/2 **protobuf** to `api2.cursor.sh`: transport-level race/retry works; semantic rewrite needs protobuf decode; "external model" limited to Cursor's backend. |
-| **Windsurf** | native `language_server` (Codeium) | asar (UI/observe) | **language-server** (proprietary backend) | Likely **not redirectable** to arbitrary models; observe via proxy/CA. Needs investigation of its config knobs. |
+| **Windsurf** | native `language_server_*` (Codeium) | asar (UI/observe) | **language-server** (proprietary backend) | **Investigated → not redirectable** to arbitrary models: the LS connects to Codeium's servers with no `base_url`/provider config (consumer build; `product.json` only exposes Codeium server/update URLs, `~/.codeium/windsurf` has no model config). Reach its traffic only via an HTTPS proxy + MITM CA on the spawned LS (observe-only). |
 
 ## Per-OS install nuances
 
@@ -90,6 +90,7 @@ same `dist` runs on any OS's Electron.
 2. **Windows/Linux install hardening**: verify fuse flip on PE/ELF, per-user paths,
    admin/AppImage handling; layout already done.
 3. **CI matrix**: win/linux unit + asar-patch smoke.
-4. **Windsurf model-control investigation** (redirectable?).
+4. ✅ **Windsurf model-control investigation** — confirmed *not* redirectable
+   (Codeium proprietary backend, no `base_url` knob). Observe-only via proxy + CA.
 5. **Cursor protobuf** decode for semantic rewrite (optional, later).
-6. Real-machine validation per OS/IDE.
+6. Real-machine validation per OS/IDE (VM/remote/CI).
