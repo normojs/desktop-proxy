@@ -21,6 +21,7 @@ import { createMainWorldHost, type MainWorldHost } from "./net/main-world";
 import { createTrafficRecorder, type TrafficRecorder } from "./net/traffic-recorder";
 import { createRendererInterceptRouter, type RendererInterceptRouter } from "./net/renderer-intercept";
 import { createTrafficWriter } from "./net/traffic-persist";
+import { redactEntry } from "./net/redact";
 import { createPluginStorage } from "./storage";
 import { createBusRouter, type BusRouter } from "@desktop-proxy/plugin-sdk";
 import { createMainIpcTransport } from "./bus-ipc";
@@ -209,6 +210,8 @@ interface Config {
   captureTraffic?: boolean;
   /** Also append finalized traffic to disk (log/traffic.ndjson) for post-mortem. */
   persistTraffic?: boolean;
+  /** Scrub credentials (auth headers, sk-/Bearer tokens) from persisted traffic. Default true. */
+  redactSecrets?: boolean;
   /**
    * Local model-traffic relay. Point an out-of-process model client (e.g. Codex's
    * core via ~/.codex/config.toml base_url) at http://127.0.0.1:<port> so its
@@ -466,8 +469,10 @@ function syncTrafficCapture(): void {
       if (!_trafficWriter) {
         const dir = path.join(LOG_DIR, "traffic.ndjson");
         _trafficWriter = createTrafficWriter(dir);
-        rec.setSink((entry) => _trafficWriter?.write(entry));
-        log("info", "traffic persistence enabled:", dir);
+        // Scrub credentials before they hit disk (unless explicitly disabled).
+        const redact = cfg.redactSecrets !== false;
+        rec.setSink((entry) => _trafficWriter?.write(redact ? redactEntry(entry) : entry));
+        log("info", `traffic persistence enabled${redact ? " (secrets redacted)" : ""}:`, dir);
       }
     } else if (_trafficWriter) {
       rec.setSink(null);

@@ -17,6 +17,7 @@ import { startRelay, type RelayOptions } from "./net/relay.js";
 import { createTrafficWriter } from "./net/traffic-persist.js";
 import { analyzeEntry } from "./net/traffic-analyze.js";
 import { extractUsage } from "./net/traffic-cost.js";
+import { redactEntry } from "./net/redact.js";
 
 const USER_ROOT = join(homedir(), ".desktop-proxy");
 const LOG_DIR = join(USER_ROOT, "log");
@@ -36,18 +37,22 @@ function ts(): string {
   return new Date().toISOString();
 }
 
-function readRelayConfig(): { relay: RelayCfg; maxBodyBytes: number } {
-  let cfg: { relay?: RelayCfg; maxResponseBodyBytes?: number } = {};
+function readRelayConfig(): { relay: RelayCfg; maxBodyBytes: number; redact: boolean } {
+  let cfg: { relay?: RelayCfg; maxResponseBodyBytes?: number; redactSecrets?: boolean } = {};
   try {
     cfg = JSON.parse(readFileSync(join(USER_ROOT, "config.json"), "utf8"));
   } catch {
     /* defaults */
   }
-  return { relay: cfg.relay ?? {}, maxBodyBytes: cfg.maxResponseBodyBytes ?? 1024 * 1024 };
+  return {
+    relay: cfg.relay ?? {},
+    maxBodyBytes: cfg.maxResponseBodyBytes ?? 1024 * 1024,
+    redact: cfg.redactSecrets !== false,
+  };
 }
 
 async function main(): Promise<void> {
-  const { relay: r, maxBodyBytes } = readRelayConfig();
+  const { relay: r, maxBodyBytes, redact } = readRelayConfig();
   if (r.enabled !== true || !r.upstream) {
     console.error(`relay daemon: config.relay is disabled or missing an upstream.\nRun e.g. "dprox relay on --codex --upstream <url> --key <key> --upstream-api chat" first.`);
     process.exit(1);
@@ -96,7 +101,7 @@ async function main(): Promise<void> {
         `${req?.method ?? "?"} ${resp.status} ${analysis.service} ${model ?? analysis.model ?? ""}` +
           (usage?.costUsd != null ? ` $${usage.costUsd.toFixed(5)}` : ""),
       );
-      writer.write({
+      const record = {
         startedDateTime: ts(),
         method: req?.method,
         url: req?.url,
@@ -107,9 +112,11 @@ async function main(): Promise<void> {
         model: model ?? analysis.model,
         tags: analysis.tags,
         usage,
+        reqHeaders: req?.headers,
         reqBody: req?.body,
         resBody: resp.body,
-      });
+      };
+      writer.write(redact ? redactEntry(record) : record);
     },
   });
 
