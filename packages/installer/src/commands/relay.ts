@@ -21,6 +21,8 @@ import {
   hasDproxRelay,
 } from "../codex-config.js";
 import { getIdeAdapter } from "../ide/adapters.js";
+import { buildRelayDiagnostics, overallStatus, type RelayCheck } from "../relay-doctor.js";
+import net from "node:net";
 import {
   buildRelayLaunchdPlist,
   buildRelaySystemdService,
@@ -113,7 +115,7 @@ function resolveRedirectIde(opts: RelayOptions): string | null {
   return id;
 }
 
-export type RelaySubcommand = "on" | "off" | "status" | "daemon" | "service";
+export type RelaySubcommand = "on" | "off" | "status" | "daemon" | "service" | "doctor";
 
 export interface RelayOptions {
   upstream?: string;
@@ -142,7 +144,94 @@ export function relay(sub: RelaySubcommand, opts: RelayOptions = {}): void {
   if (sub === "status") return relayStatus(opts);
   if (sub === "off") return relayOff(opts);
   if (sub === "daemon") return relayDaemon();
+  if (sub === "doctor") {
+    void relayDoctor();
+    return;
+  }
   return relayOn(opts);
+}
+
+/** TCP reachability probe (true if something accepts a connection). */
+function tcpProbe(host: string, port: number, timeoutMs = 2500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host, port });
+    const done = (ok: boolean) => {
+      sock.destroy();
+      resolve(ok);
+    };
+    sock.once("connect", () => done(true));
+    sock.once("error", () => resolve(false));
+    sock.setTimeout(timeoutMs, () => done(false));
+  });
+}
+
+function printChecks(checks: RelayCheck[]): void {
+  const icon = (s: string) => (s === "ok" ? "✓" : s === "warn" ? "!" : "✗");
+  console.log("");
+  for (const c of checks) {
+    const line = `  ${icon(c.status)} ${c.name}${c.detail ? `: ${c.detail}` : ""}`;
+    console.log(line);
+    if (c.hint && c.status !== "ok") console.log(`      → ${c.hint}`);
+  }
+  const overall = overallStatus(checks);
+  console.log(`\n  ${overall === "ok" ? "All good." : overall === "warn" ? "Mostly OK (warnings above)." : "Problems found (see above)."}\n`);
+}
+
+/** Diagnose the relay/Codex setup end-to-end. */
+async function relayDoctor(): Promise<void> {
+  const cfg = readConfig();
+  const port = cfg.relay?.port ?? DEFAULT_PORT;
+  const localBase = `http://127.0.0.1:${port}/v1`;
+
+  let codexToml: string | null = null;
+  try {
+    codexToml = readFileSync(CODEX_CONFIG, "utf8");
+  } catch {
+    /* not installed */
+  }
+  const provider = codexToml ? currentProvider(codexToml) : null;
+
+  const checks = buildRelayDiagnostics({
+    enabled: cfg.relay?.enabled,
+    upstream: cfg.relay?.upstream,
+    localBase,
+    apiKey: cfg.relay?.apiKey,
+    modelMap: cfg.relay?.modelMap,
+    upstreamApi: cfg.relay?.upstreamApi,
+    codexConfigPresent: !!codexToml,
+    codexHasRelay: codexToml ? hasDproxRelay(codexToml) : false,
+    codexProviderBaseUrl: provider?.baseUrl ?? null,
+    codexAuthPresent: existsSync(CODEX_AUTH),
+  });
+
+  // Live network probes.
+  const daemonUp = await tcpProbe("127.0.0.1", port);
+  checks.push(
+    daemonUp
+      ? { name: "relay listening", status: "ok", detail: `127.0.0.1:${port}` }
+      : {
+          name: "relay listening",
+          status: "fail",
+          hint: 'nothing on the port — run "dprox relay daemon" (or "relay service install"), or launch the injected app',
+        },
+  );
+
+  if (cfg.relay?.upstream) {
+    try {
+      const u = new URL(cfg.relay.upstream);
+      const uport = Number(u.port) || (u.protocol === "https:" ? 443 : 80);
+      const reachable = await tcpProbe(u.hostname, uport);
+      checks.push(
+        reachable
+          ? { name: "upstream reachable", status: "ok", detail: `${u.hostname}:${uport}` }
+          : { name: "upstream reachable", status: "warn", detail: `${u.hostname}:${uport}`, hint: "check network / set --proxy" },
+      );
+    } catch {
+      checks.push({ name: "upstream reachable", status: "warn", detail: "invalid upstream URL" });
+    }
+  }
+
+  printChecks(checks);
 }
 
 const here = dirname(fileURLToPath(import.meta.url));

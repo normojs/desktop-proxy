@@ -60,6 +60,7 @@ Usage:
   desktop-proxy pair [--name <label>] Show a QR/link to pair a phone with the remote bus (NATS; see docs/nats-deploy.md)
   desktop-proxy relay <on|off|status|daemon> Local model-traffic relay: capture/rewrite/translate model calls. "daemon" runs it standalone (no app injection needed for Codex); "--codex" wires ~/.codex/config.toml + login bypass
   desktop-proxy relay service <install|uninstall|status> Run the relay daemon as a background service (launchd/systemd/Task Scheduler; auto-start)
+  desktop-proxy relay doctor          Diagnose the relay/Codex setup (config, daemon, upstream reachability)
 
 Options:
   --app <path>      Path to the .app bundle (auto-detected if omitted)
@@ -262,8 +263,8 @@ async function main(): Promise<void> {
         relayService(action);
         break;
       }
-      if (sub !== "on" && sub !== "off" && sub !== "status" && sub !== "daemon") {
-        console.error(`Unknown relay subcommand "${sub}". Use: on | off | status | daemon | service.`);
+      if (sub !== "on" && sub !== "off" && sub !== "status" && sub !== "daemon" && sub !== "doctor") {
+        console.error(`Unknown relay subcommand "${sub}". Use: on | off | status | daemon | service | doctor.`);
         process.exit(1);
       }
       const modelMap = typeof opts.map === "string" ? parseModelMap(opts.map) : undefined;
