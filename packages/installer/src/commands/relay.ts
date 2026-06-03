@@ -8,7 +8,7 @@
  * non-destructively in front of an existing relay (e.g. CodexPlusPlus's 57321).
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -21,7 +21,9 @@ import {
 
 const USER_ROOT = join(homedir(), ".desktop-proxy");
 const CONFIG_FILE = join(USER_ROOT, "config.json");
-const CODEX_CONFIG = join(homedir(), ".codex", "config.toml");
+const CODEX_DIR = join(homedir(), ".codex");
+const CODEX_CONFIG = join(CODEX_DIR, "config.toml");
+const CODEX_AUTH = join(CODEX_DIR, "auth.json");
 const DEFAULT_PORT = 8788;
 
 interface RelayCfg {
@@ -64,6 +66,8 @@ export interface RelayOptions {
   proxy?: string;
   codex?: boolean;
   json?: boolean;
+  /** Skip writing ~/.codex/auth.json (keep the real ChatGPT login). */
+  noAuth?: boolean;
   /** model rewrite map (exact or `prefix*`). */
   modelMap?: Record<string, string>;
   /** ordered fallback models if the request errors. */
@@ -122,11 +126,20 @@ function relayOn(opts: RelayOptions): void {
   writeConfig(cfg);
 
   if (opts.codex) {
+    const providerToken = token ?? "dprox-local";
     const bak = `${CODEX_CONFIG}.dprox-bak-${stamp()}`;
     copyFileSync(CODEX_CONFIG, bak);
-    writeFileSync(CODEX_CONFIG, applyCodexRelay(codexToml, { baseUrl: localBase, token }));
+    writeFileSync(CODEX_CONFIG, applyCodexRelay(codexToml, { baseUrl: localBase, token: providerToken }));
     console.log(`\n  ✓ Codex core pointed at the relay (${localBase}).`);
     console.log(`    Backup:  ${bak}`);
+
+    // Login bypass (the CodexPlusPlus trick): Codex authenticates via API key when
+    // ~/.codex/auth.json has OPENAI_API_KEY, skipping the ChatGPT OAuth screen.
+    if (opts.noAuth !== true) {
+      if (existsSync(CODEX_AUTH)) copyFileSync(CODEX_AUTH, `${CODEX_AUTH}.dprox-bak-${stamp()}`);
+      writeFileSync(CODEX_AUTH, JSON.stringify({ OPENAI_API_KEY: providerToken }, null, 2));
+      console.log(`    ✓ Wrote ~/.codex/auth.json (OPENAI_API_KEY) — Codex skips ChatGPT login.`);
+    }
     console.log(`    Revert:  dprox relay off --codex`);
   }
 
@@ -159,6 +172,21 @@ function relayOff(opts: RelayOptions): void {
       writeFileSync(CODEX_CONFIG, removeCodexRelay(toml));
       console.log(`\n  ✓ Codex config restored to its previous provider (backup: ${bak}).`);
     }
+    // Undo the login bypass: restore the most recent auth.json backup, else
+    // remove the one we wrote (so Codex asks for real login again).
+    if (existsSync(CODEX_AUTH)) {
+      const baks = readdirSync(CODEX_DIR)
+        .filter((f) => f.startsWith("auth.json.dprox-bak-"))
+        .sort();
+      const latest = baks[baks.length - 1];
+      if (latest) {
+        copyFileSync(join(CODEX_DIR, latest), CODEX_AUTH);
+        console.log(`  ✓ Restored ~/.codex/auth.json from ${latest}.`);
+      } else {
+        rmSync(CODEX_AUTH, { force: true });
+        console.log(`  ✓ Removed ~/.codex/auth.json (login required again).`);
+      }
+    }
   }
 
   console.log(`\n  ✓ relay disabled. Restart the target app to apply.\n`);
@@ -190,5 +218,12 @@ function relayStatus(opts: RelayOptions): void {
     console.log(`    Active provider: ${prov?.name ?? "(none)"} → ${prov?.baseUrl ?? "(no base_url)"}`);
     console.log(`    dprox-wired:     ${codexWired ? "yes" : "no"}`);
   }
+  let loginBypass = false;
+  try {
+    loginBypass = typeof (JSON.parse(readFileSync(CODEX_AUTH, "utf8")) as { OPENAI_API_KEY?: unknown }).OPENAI_API_KEY === "string";
+  } catch {
+    /* no auth.json */
+  }
+  console.log(`    login bypass:    ${loginBypass ? "on (auth.json OPENAI_API_KEY)" : "off (ChatGPT login)"}`);
   console.log();
 }

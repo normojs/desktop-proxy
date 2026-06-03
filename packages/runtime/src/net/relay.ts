@@ -112,7 +112,10 @@ export function buildForwardHeaders(
     out[k] = v;
   }
   out["accept-encoding"] = "identity";
-  if (opts.apiKey && !Object.keys(out).some((k) => k.toLowerCase() === "authorization")) {
+  if (opts.apiKey) {
+    // The relay holds the real upstream key: replace whatever the client sent
+    // (Codex sends the provider's placeholder token; we swap in the real one).
+    for (const k of Object.keys(out)) if (k.toLowerCase() === "authorization") delete out[k];
     out["authorization"] = `Bearer ${opts.apiKey}`;
   }
   return out;

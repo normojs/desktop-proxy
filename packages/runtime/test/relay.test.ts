@@ -50,10 +50,15 @@ describe("buildForwardHeaders", () => {
     expect(out.authorization).toBe("Bearer sk-test");
   });
 
-  it("never overrides an existing Authorization header", () => {
-    const out = buildForwardHeaders({ Authorization: "Bearer real" }, { apiKey: "sk-test" });
-    expect(out.Authorization).toBe("Bearer real");
-    expect(out.authorization).toBeUndefined();
+  it("overrides the client Authorization when an apiKey is set (relay holds the key)", () => {
+    const out = buildForwardHeaders({ Authorization: "Bearer client" }, { apiKey: "sk-relay" });
+    expect(out.authorization).toBe("Bearer sk-relay");
+    expect(out.Authorization).toBeUndefined();
+  });
+
+  it("passes the client Authorization through when no apiKey is set", () => {
+    const out = buildForwardHeaders({ Authorization: "Bearer client" });
+    expect(out.Authorization).toBe("Bearer client");
   });
 });
 

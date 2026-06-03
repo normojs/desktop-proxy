@@ -78,7 +78,8 @@ Options:
   --proxy <url>            Relay outbound proxy, e.g. http://127.0.0.1:7897 (relay on)
   --map <k=v,...>          Relay model rewrite, e.g. "gpt-5*=deepseek-v4-pro" (relay on)
   --fallback <m,...>       Relay fallback models to retry on error (relay on)
-  --codex                  Also wire ~/.codex/config.toml (relay on/off)
+  --codex                  Also wire ~/.codex/config.toml + auth.json login bypass (relay on/off)
+  --no-auth                With --codex, keep real ChatGPT login (don't write auth.json)
   --id/--name/--scope <v>  create-plugin manifest fields
   --json            Machine-readable output (doctor, plugin/config/validate)
   --quiet           Suppress progress output
@@ -155,6 +156,8 @@ async function main(): Promise<void> {
       opts.fallback = args[++i];
     } else if (a === "--codex") {
       opts.codex = true;
+    } else if (a === "--no-auth") {
+      opts.noAuth = true;
     } else if (a === "--strict-ssl") {
       opts.strictSSL = true;
     } else if (a === "--open" && args[i + 1]) {
@@ -252,6 +255,7 @@ async function main(): Promise<void> {
         port: opts.port as number | undefined,
         proxy: opts.proxy as string | undefined,
         codex: opts.codex as boolean | undefined,
+        noAuth: opts.noAuth as boolean | undefined,
         modelMap,
         fallbackModels,
         json,
