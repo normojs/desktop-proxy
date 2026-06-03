@@ -161,14 +161,15 @@ if [ "$SKIP_NSC" != "1" ]; then
   # Idempotent: only create operator/account if missing, so re-runs keep the
   # SAME keys (existing desktops/phones stay valid).
   nsc describe operator DP >/dev/null 2>&1 || nsc add operator --generate-signing-key --sys --name DP
-  # Push over TLS using an address the cert covers (domain for LE; the public IP
-  # for self-signed, which we add to its SAN) — pushing to 127.0.0.1 fails TLS.
-  JWT_URL="tls://${DOMAIN:-$HOST_ADDR}:$PORT"
-  nsc edit operator --require-signing-keys --account-jwt-server-url "$JWT_URL" >/dev/null 2>&1 || true
+  nsc edit operator --require-signing-keys >/dev/null 2>&1 || true
   nsc describe account APP >/dev/null 2>&1 || nsc add account APP
   SKN="$(nsc describe account APP -J 2>/dev/null | jq -r '(.nats.signing_keys // []) | length')"
   [ "${SKN:-0}" -ge 1 ] || nsc edit account APP --sk generate
-  nsc generate config --nats-resolver --sys-account SYS | $SUDO tee "$NATS_DIR/resolver.conf" >/dev/null
+  # MEMORY resolver embeds the account JWTs directly in the server config — NO
+  # network push needed (avoids the TLS-to-127.0.0.1 problem). New USERS are
+  # minted locally by the desktop and validated against this account, so adding
+  # desktops/phones still needs zero server ops.
+  nsc generate config --mem-resolver --sys-account SYS | $SUDO tee "$NATS_DIR/resolver.conf" >/dev/null
 fi
 
 # ── 5. autostart ─────────────────────────────────────────────────────────────
@@ -216,10 +217,8 @@ fi
 
 # ── 7. push accounts + extract desktop credentials ───────────────────────────
 if [ "$SKIP_NSC" != "1" ]; then
-  sleep 2
-  say "Pushing accounts to the resolver (tls://${DOMAIN:-$HOST_ADDR}:$PORT)"
-  nsc push -A || { sleep 2; nsc push -A; } || \
-    say "WARNING: nsc push failed — accounts not uploaded; desktops won't authenticate. Ensure tls://${DOMAIN:-$HOST_ADDR}:$PORT is reachable from THIS host (DNS + port + valid cert), then run: nsc push -A"
+  # No `nsc push` needed: the MEMORY resolver already embedded the accounts in
+  # the config that the server loaded on (re)start. Just extract the creds.
   set +e
   ACCOUNT_ID="$(nsc describe account APP -J 2>/dev/null | jq -r '.sub // empty')"
   # signing_keys[0] may be a plain string or an object {key:...} depending on nsc version.
@@ -258,7 +257,7 @@ if [ "$SKIP_NSC" != "1" ] && { [ -z "$ACCOUNT_ID" ] || [ -z "$ACCOUNT_SEED" ]; }
 
 !! Could not auto-extract account credentials (nsc version differences). Get them manually:
    accountId:   nsc describe account APP -J | jq -r .sub
-   signingKey:  nsc describe account APP -J | jq -r '.nats.signing_keys[0].key // .nats.signing_keys[0]'
+   signingKey:  nsc describe account APP -J | jq -r '.nats.signing_keys[0] | if type=="object" then .key else . end'
    accountSeed: find ~/.local/share/nats/nsc/keys -name "<signingKey>.nk" -exec cat {} \;
 EOF
 fi
