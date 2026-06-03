@@ -57,7 +57,29 @@ A small HTTP server (inside the injected runtime, config-gated by `config.relay`
 Changes apply **live** via the config watcher (no app restart needed for the
 relay itself; the IDE core re-reads its own config on launch).
 
+## Two ways to run the relay
+
+1. **Standalone daemon (`dprox relay daemon`)** — a pure-Node process; **no app
+   injection** (no asar patch, re-sign, sudo or TCC). This is all a *config-redirect*
+   IDE (Codex) needs: write its config + run the daemon. Records to
+   `log/relay-daemon.ndjson`. Cross-platform by construction.
+2. **In the injected runtime** — when you've run `dprox install`, the relay also
+   runs inside the app (config-gated by `config.relay`) and feeds the in-app
+   Network inspector + bus. Use this for in-process IDEs (Cursor) and the GUI.
+
 ## Recipe: Codex + DeepSeek, no login (verified)
+
+### A. No-injection (simplest — recommended for Codex)
+
+```bash
+# Point Codex's core at the relay + bypass login (writes config.toml + auth.json; no sudo)
+dprox relay on --codex --upstream https://api.deepseek.com/v1 --key sk-<KEY> --upstream-api chat --map "gpt-*=deepseek-v4-flash"
+# Run the standalone relay (Ctrl-C to stop; or wrap as a launchd/systemd service)
+dprox relay daemon
+# Launch Codex normally — no login, model traffic flows through the daemon.
+```
+
+### B. Injected (also captures into the in-app inspector + bus)
 
 ```bash
 # 1) Inject the runtime (sudo on macOS to modify /Applications; lands in your ~/.desktop-proxy)

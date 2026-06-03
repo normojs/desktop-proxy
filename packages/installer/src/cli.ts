@@ -58,7 +58,7 @@ Usage:
   desktop-proxy proxy <on|off|status> Configure a renderer/ext-host proxy for VS Code forks (no injection)
   desktop-proxy permissions [--open <id>] Re-grant OS permissions after install (macOS TCC; opens Settings)
   desktop-proxy pair [--name <label>] Show a QR/link to pair a phone with the remote bus (NATS; see docs/nats-deploy.md)
-  desktop-proxy relay <on|off|status> Local model-traffic relay: capture + forward an IDE core's model calls (--codex wires ~/.codex/config.toml)
+  desktop-proxy relay <on|off|status|daemon> Local model-traffic relay: capture/rewrite/translate model calls. "daemon" runs it standalone (no app injection needed for Codex); "--codex" wires ~/.codex/config.toml + login bypass
 
 Options:
   --app <path>      Path to the .app bundle (auto-detected if omitted)
@@ -246,8 +246,8 @@ async function main(): Promise<void> {
 
     case "relay": {
       const sub = (positionals[1] as RelaySubcommand | undefined) ?? "status";
-      if (sub !== "on" && sub !== "off" && sub !== "status") {
-        console.error(`Unknown relay subcommand "${sub}". Use: on | off | status.`);
+      if (sub !== "on" && sub !== "off" && sub !== "status" && sub !== "daemon") {
+        console.error(`Unknown relay subcommand "${sub}". Use: on | off | status | daemon.`);
         process.exit(1);
       }
       const modelMap = typeof opts.map === "string" ? parseModelMap(opts.map) : undefined;

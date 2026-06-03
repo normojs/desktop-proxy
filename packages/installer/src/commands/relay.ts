@@ -9,7 +9,9 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { join, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 import {
@@ -58,7 +60,7 @@ function stamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-export type RelaySubcommand = "on" | "off" | "status";
+export type RelaySubcommand = "on" | "off" | "status" | "daemon";
 
 export interface RelayOptions {
   upstream?: string;
@@ -82,7 +84,39 @@ export interface RelayOptions {
 export function relay(sub: RelaySubcommand, opts: RelayOptions = {}): void {
   if (sub === "status") return relayStatus(opts);
   if (sub === "off") return relayOff(opts);
+  if (sub === "daemon") return relayDaemon();
   return relayOn(opts);
+}
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+/** Resolve the bundled standalone relay daemon (staged install, then dev tree). */
+function resolveDaemon(): string | null {
+  const candidates = [
+    join(USER_ROOT, "runtime", "relay-daemon.js"),
+    resolve(here, "..", "..", "..", "runtime", "dist", "relay-daemon.js"),
+  ];
+  return candidates.find((p) => existsSync(p)) ?? null;
+}
+
+/**
+ * Run the standalone relay daemon (foreground). For config-redirect IDEs (Codex)
+ * this needs NO app injection — just `relay on --codex` + this daemon running.
+ */
+function relayDaemon(): void {
+  const cfg = readConfig();
+  if (cfg.relay?.enabled !== true || !cfg.relay.upstream) {
+    console.error(`\n  Relay is not enabled. Run "dprox relay on ..." first.\n`);
+    process.exit(1);
+  }
+  const daemon = resolveDaemon();
+  if (!daemon) {
+    console.error(`\n  relay-daemon.js not found. Build the runtime first: pnpm build:runtime\n`);
+    process.exit(1);
+  }
+  console.log(`\n  Starting relay daemon (Ctrl-C to stop) — no app injection needed for config-redirect IDEs.\n`);
+  const child = spawn(process.execPath, [daemon], { stdio: "inherit" });
+  child.on("exit", (code) => process.exit(code ?? 0));
 }
 
 function relayOn(opts: RelayOptions): void {
