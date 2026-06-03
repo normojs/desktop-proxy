@@ -21,6 +21,7 @@ import http from "node:http";
 import { request as undiciRequest, ProxyAgent, type Dispatcher } from "undici";
 
 import { responsesToChat, ResponsesStreamConverter } from "./protocol/responses-chat.js";
+import { applySystemTransforms, applyParams, transformsActive, type RelayTransforms } from "./transform.js";
 
 export interface RelayObservedRequest {
   id: string;
@@ -69,6 +70,8 @@ export interface RelayOptions {
    * chat-only backends (DeepSeek, most relays) work. Default "responses" (passthrough).
    */
   upstreamApi?: "responses" | "chat";
+  /** In-flight request transforms (system prompt / rules / params) applied before forwarding. */
+  transforms?: RelayTransforms;
 }
 
 export interface RelayHooks {
@@ -231,8 +234,13 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
     if (!isBodyless && reqBuf.length > 0 && /json/i.test(incoming["content-type"] ?? "")) {
       try {
         const parsedRaw = JSON.parse(reqBuf.toString("utf8")) as Record<string, unknown>;
-        const parsed = translate ? (responsesToChat(parsedRaw) as Record<string, unknown>) : parsedRaw;
-        if (translate || typeof parsed.model === "string") baseObj = parsed;
+        // In-flight transforms (system prompt / rules) apply to the original body
+        // before translation, so they carry through either protocol; params apply
+        // to the final forwarded body.
+        const shaped = applySystemTransforms(parsedRaw, opts.transforms);
+        const translated = translate ? (responsesToChat(shaped) as Record<string, unknown>) : shaped;
+        const parsed = applyParams(translated, opts.transforms);
+        if (translate || typeof parsed.model === "string" || transformsActive(opts.transforms)) baseObj = parsed;
         if (typeof parsed.model === "string") {
           originalModel = parsed.model;
           const mapped = rewriteModel(parsed.model, opts.modelMap ?? {});
@@ -247,7 +255,7 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
     const attempts: (string | null)[] = candidates.length > 0 ? candidates : [null];
 
     let upstream: Dispatcher.ResponseData | null = null;
-    let sentBody = translate && baseObj ? Buffer.from(JSON.stringify(baseObj)) : reqBuf;
+    let sentBody = baseObj ? Buffer.from(JSON.stringify(baseObj)) : reqBuf;
     let sentModel = originalModel;
 
     for (let i = 0; i < attempts.length; i++) {

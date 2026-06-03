@@ -49,6 +49,12 @@ interface RelayCfg {
   modelMap?: Record<string, string>;
   fallbackModels?: string[];
   upstreamApi?: "responses" | "chat";
+  transforms?: RelayTransformsCfg;
+}
+interface RelayTransformsCfg {
+  systemPrompt?: { mode?: "prepend" | "append" | "replace"; text: string };
+  rules?: string[];
+  params?: Record<string, unknown>;
 }
 interface Config {
   relay?: RelayCfg;
@@ -128,6 +134,8 @@ export interface RelayOptions {
   modelMap?: Record<string, string>;
   /** ordered fallback models if the request errors. */
   fallbackModels?: string[];
+  /** Append a system-prompt instruction to every request (in-flight transform). */
+  system?: string;
 }
 
 export function relay(sub: RelaySubcommand, opts: RelayOptions = {}): void {
@@ -324,6 +332,10 @@ function relayOn(opts: RelayOptions): void {
     modelMap: opts.modelMap ?? cfg.relay?.modelMap,
     fallbackModels: opts.fallbackModels ?? cfg.relay?.fallbackModels,
     upstreamApi: opts.upstreamApi ?? cfg.relay?.upstreamApi,
+    transforms:
+      opts.system !== undefined
+        ? { ...cfg.relay?.transforms, systemPrompt: { mode: "append", text: opts.system } }
+        : cfg.relay?.transforms,
   };
   writeConfig(cfg);
 

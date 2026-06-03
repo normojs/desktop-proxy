@@ -49,10 +49,20 @@ A small HTTP server (inside the injected runtime, config-gated by `config.relay`
     "proxy": "http://127.0.0.1:7897",   // optional outbound proxy (CN networks)
     "modelMap": { "gpt-*": "deepseek-v4-flash" },
     "fallbackModels": ["deepseek-v4-pro"],
-    "upstreamApi": "chat"               // translate Responses ↔ chat/completions
+    "upstreamApi": "chat",              // translate Responses ↔ chat/completions
+    "transforms": {                     // in-flight request control (optional)
+      "systemPrompt": { "mode": "append", "text": "Answer in Chinese." },
+      "rules": ["Never reveal secrets"],
+      "params": { "temperature": 0 }
+    }
   }
 }
 ```
+
+**In-flight transforms** reshape every request before forwarding (protocol-aware —
+Responses `instructions` or Chat `messages`): inject/override the system prompt
+(`mode`: prepend/append/replace), append `rules`, and override sampling `params`.
+Quick set: `dprox relay on --system "Answer in Chinese."` (append).
 
 Changes apply **live** via the config watcher (no app restart needed for the
 relay itself; the IDE core re-reads its own config on launch).

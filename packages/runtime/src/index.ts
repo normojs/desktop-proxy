@@ -235,6 +235,8 @@ interface Config {
     fallbackModels?: string[];
     /** "chat" → translate Codex Responses API ↔ chat/completions for chat-only backends. */
     upstreamApi?: "responses" | "chat";
+    /** In-flight request transforms (system prompt / rules / params). */
+    transforms?: import("./net/transform").RelayTransforms;
   };
   /** Stable id for this install, used in NATS subjects (auto-generated). */
   instanceId?: string;
@@ -496,7 +498,7 @@ async function syncRelay(): Promise<void> {
     const r = cfg.relay;
     const want = r?.enabled === true && typeof r.upstream === "string" && r.upstream.length > 0;
     const key = want
-      ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0, m: r!.modelMap ?? {}, f: r!.fallbackModels ?? [], a: r!.upstreamApi ?? "" })
+      ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0, m: r!.modelMap ?? {}, f: r!.fallbackModels ?? [], a: r!.upstreamApi ?? "", t: r!.transforms ?? null })
       : "";
     if (key === _relayKey) return; // unchanged
 
@@ -518,6 +520,7 @@ async function syncRelay(): Promise<void> {
         modelMap: r!.modelMap,
         fallbackModels: r!.fallbackModels,
         upstreamApi: r!.upstreamApi,
+        transforms: r!.transforms,
         maxBodyBytes: readConfig().maxResponseBodyBytes ?? 1024 * 1024,
       },
       {

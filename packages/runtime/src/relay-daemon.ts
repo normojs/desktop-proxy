@@ -18,6 +18,7 @@ import { createTrafficWriter } from "./net/traffic-persist.js";
 import { analyzeEntry } from "./net/traffic-analyze.js";
 import { extractUsage } from "./net/traffic-cost.js";
 import { redactEntry } from "./net/redact.js";
+import type { RelayTransforms } from "./net/transform.js";
 
 const USER_ROOT = join(homedir(), ".desktop-proxy");
 const LOG_DIR = join(USER_ROOT, "log");
@@ -31,6 +32,7 @@ interface RelayCfg {
   modelMap?: Record<string, string>;
   fallbackModels?: string[];
   upstreamApi?: "responses" | "chat";
+  transforms?: RelayTransforms;
 }
 
 function ts(): string {
@@ -72,6 +74,7 @@ async function main(): Promise<void> {
     modelMap: r.modelMap,
     fallbackModels: r.fallbackModels,
     upstreamApi: r.upstreamApi,
+    transforms: r.transforms,
     maxBodyBytes,
   };
 
