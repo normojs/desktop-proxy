@@ -133,6 +133,12 @@ else
   SAN=$([ -n "$DOMAIN" ] && echo "DNS:$DOMAIN" || echo "IP:$HOST_ADDR")
   $SUDO openssl req -x509 -newkey rsa:2048 -nodes -keyout "$KEY" -out "$CERT" -days 825 \
     -subj "/CN=$HOST_ADDR" -addext "subjectAltName=$SAN"
+  # Trust the self-signed CA system-wide so `nsc push` (TLS) validates.
+  if [ -d /etc/pki/ca-trust/source/anchors ]; then
+    $SUDO cp "$CERT" /etc/pki/ca-trust/source/anchors/dp-nats.crt && $SUDO update-ca-trust extract >/dev/null 2>&1 || true
+  elif [ -d /usr/local/share/ca-certificates ]; then
+    $SUDO cp "$CERT" /usr/local/share/ca-certificates/dp-nats.crt && $SUDO update-ca-certificates >/dev/null 2>&1 || true
+  fi
 fi
 
 # ── 3. base server config ────────────────────────────────────────────────────
@@ -155,7 +161,10 @@ if [ "$SKIP_NSC" != "1" ]; then
   # Idempotent: only create operator/account if missing, so re-runs keep the
   # SAME keys (existing desktops/phones stay valid).
   nsc describe operator DP >/dev/null 2>&1 || nsc add operator --generate-signing-key --sys --name DP
-  nsc edit operator --require-signing-keys --account-jwt-server-url "nats://127.0.0.1:$PORT" >/dev/null 2>&1 || true
+  # Push over TLS using an address the cert covers (domain for LE; the public IP
+  # for self-signed, which we add to its SAN) — pushing to 127.0.0.1 fails TLS.
+  JWT_URL="tls://${DOMAIN:-$HOST_ADDR}:$PORT"
+  nsc edit operator --require-signing-keys --account-jwt-server-url "$JWT_URL" >/dev/null 2>&1 || true
   nsc describe account APP >/dev/null 2>&1 || nsc add account APP
   SKN="$(nsc describe account APP -J 2>/dev/null | jq -r '(.nats.signing_keys // []) | length')"
   [ "${SKN:-0}" -ge 1 ] || nsc edit account APP --sk generate
@@ -208,10 +217,13 @@ fi
 # ── 7. push accounts + extract desktop credentials ───────────────────────────
 if [ "$SKIP_NSC" != "1" ]; then
   sleep 2
-  nsc push -A >/dev/null 2>&1 || nsc push -A || true
+  say "Pushing accounts to the resolver (tls://${DOMAIN:-$HOST_ADDR}:$PORT)"
+  nsc push -A || { sleep 2; nsc push -A; } || \
+    say "WARNING: nsc push failed — accounts not uploaded; desktops won't authenticate. Ensure tls://${DOMAIN:-$HOST_ADDR}:$PORT is reachable from THIS host (DNS + port + valid cert), then run: nsc push -A"
   set +e
   ACCOUNT_ID="$(nsc describe account APP -J 2>/dev/null | jq -r '.sub // empty')"
-  SK_PUB="$(nsc describe account APP -J 2>/dev/null | jq -r '(.nats.signing_keys[0].key // .nats.signing_keys[0]) // empty')"
+  # signing_keys[0] may be a plain string or an object {key:...} depending on nsc version.
+  SK_PUB="$(nsc describe account APP -J 2>/dev/null | jq -r '(.nats.signing_keys[0] | if type=="object" then .key else . end) // empty')"
   if [ -n "$SK_PUB" ]; then
     NK="$(find "${NKEYS_PATH:-$HOME/.local/share/nats/nsc/keys}" -name "${SK_PUB}.nk" 2>/dev/null | head -1)"
     [ -n "$NK" ] && ACCOUNT_SEED="$(cat "$NK" 2>/dev/null)"
