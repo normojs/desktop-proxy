@@ -239,6 +239,8 @@ interface Config {
     transforms?: import("./net/transform").RelayTransforms;
     /** Conditional model routes (evaluated before modelMap). */
     routes?: import("./net/route").RouteRule[];
+    /** Cost budget: daily/monthly USD cap, warn or block. */
+    budget?: import("./net/budget").BudgetConfig;
   };
   /** Stable id for this install, used in NATS subjects (auto-generated). */
   instanceId?: string;
@@ -500,7 +502,7 @@ async function syncRelay(): Promise<void> {
     const r = cfg.relay;
     const want = r?.enabled === true && typeof r.upstream === "string" && r.upstream.length > 0;
     const key = want
-      ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0, m: r!.modelMap ?? {}, f: r!.fallbackModels ?? [], a: r!.upstreamApi ?? "", t: r!.transforms ?? null, rt: r!.routes ?? null })
+      ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0, m: r!.modelMap ?? {}, f: r!.fallbackModels ?? [], a: r!.upstreamApi ?? "", t: r!.transforms ?? null, rt: r!.routes ?? null, b: r!.budget ?? null })
       : "";
     if (key === _relayKey) return; // unchanged
 
@@ -512,7 +514,11 @@ async function syncRelay(): Promise<void> {
     if (!want) return;
 
     const { startRelay } = await import("./net/relay.js");
+    const { createBudgetTracker } = await import("./net/budget.js");
+    const { extractUsage } = await import("./net/traffic-cost.js");
     const net = getMainNetwork();
+    const budget = createBudgetTracker(path.join(LOG_DIR, "relay-budget.json"), () => readConfig().relay?.budget);
+    const reqModel = new Map<string, string>();
     _relay = await startRelay(
       {
         port: r!.port ?? 8788,
@@ -528,7 +534,21 @@ async function syncRelay(): Promise<void> {
       },
       {
         log,
-        onRequest: (req) =>
+        beforeForward: () => {
+          const v = budget.check();
+          if (!v.over) return undefined;
+          const msg = `relay budget exceeded: ${v.scope} $${v.spent.toFixed(4)} ≥ $${v.limit}`;
+          if (readConfig().relay?.budget?.action === "block") return { block: true, status: 402, message: msg };
+          log("warn", msg);
+          return undefined;
+        },
+        onRequest: (req) => {
+          try {
+            const m = JSON.parse(req.body ?? "{}").model;
+            if (typeof m === "string") reqModel.set(req.id, m);
+          } catch {
+            /* not JSON */
+          }
           net.observeRequest({
             id: req.id,
             source: "relay",
@@ -539,8 +559,13 @@ async function syncRelay(): Promise<void> {
             body: req.body,
             bodyEncoding: req.bodyEncoding,
             timestamp: Date.now(),
-          }),
-        onResponse: (resp) =>
+          });
+        },
+        onResponse: (resp) => {
+          const model = reqModel.get(resp.requestId);
+          reqModel.delete(resp.requestId);
+          const usage = extractUsage(model, resp.body);
+          if (usage?.costUsd) budget.record(usage.costUsd);
           net.observeResponse({
             id: `resp-${resp.requestId}`,
             requestId: resp.requestId,
@@ -550,7 +575,8 @@ async function syncRelay(): Promise<void> {
             headers: resp.headers,
             body: resp.body,
             timestamp: Date.now(),
-          }),
+          });
+        },
       },
     );
   } catch (e) {

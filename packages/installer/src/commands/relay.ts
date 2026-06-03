@@ -52,11 +52,17 @@ interface RelayCfg {
   fallbackModels?: string[];
   upstreamApi?: "responses" | "chat";
   transforms?: RelayTransformsCfg;
+  budget?: RelayBudgetCfg;
 }
 interface RelayTransformsCfg {
   systemPrompt?: { mode?: "prepend" | "append" | "replace"; text: string };
   rules?: string[];
   params?: Record<string, unknown>;
+}
+interface RelayBudgetCfg {
+  dailyUsd?: number;
+  monthlyUsd?: number;
+  action?: "warn" | "block";
 }
 interface Config {
   relay?: RelayCfg;
@@ -138,6 +144,10 @@ export interface RelayOptions {
   fallbackModels?: string[];
   /** Append a system-prompt instruction to every request (in-flight transform). */
   system?: string;
+  /** Daily USD cost cap. */
+  budget?: number;
+  /** Block (vs warn) when over budget. */
+  budgetBlock?: boolean;
 }
 
 export function relay(sub: RelaySubcommand, opts: RelayOptions = {}): void {
@@ -425,6 +435,10 @@ function relayOn(opts: RelayOptions): void {
       opts.system !== undefined
         ? { ...cfg.relay?.transforms, systemPrompt: { mode: "append", text: opts.system } }
         : cfg.relay?.transforms,
+    budget:
+      opts.budget !== undefined
+        ? { ...cfg.relay?.budget, dailyUsd: opts.budget, action: opts.budgetBlock ? "block" : "warn" }
+        : cfg.relay?.budget,
   };
   writeConfig(cfg);
 

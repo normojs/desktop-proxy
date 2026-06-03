@@ -59,10 +59,15 @@ A small HTTP server (inside the injected runtime, config-gated by `config.relay`
       { "when": { "contentMatches": "think step by step" }, "model": "deepseek-reasoner" },
       { "when": { "maxChars": 400 }, "model": "deepseek-v4-flash" },
       { "when": {}, "model": "deepseek-v4-pro" }
-    ]
+    ],
+    "budget": { "dailyUsd": 5, "action": "block" }   // cost cap: warn | block when over
   }
 }
 ```
+
+**Budgets** cap estimated spend: the relay accumulates per-day/month USD from token
+usage; `action: "warn"` logs when over, `"block"` rejects new requests (HTTP 402)
+until the window rolls over. Quick set: `dprox relay on --budget 5 --budget-block`.
 
 **Routes** pick a model *conditionally* (first match wins, before `modelMap`):
 match the incoming model (`modelMatches`, exact/`prefix*`), a regex over the

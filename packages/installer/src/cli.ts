@@ -81,6 +81,8 @@ Options:
   --map <k=v,...>          Relay model rewrite, e.g. "gpt-5*=deepseek-v4-pro" (relay on)
   --fallback <m,...>       Relay fallback models to retry on error (relay on)
   --system <text>          Relay: append a system-prompt instruction to every request (in-flight transform)
+  --budget <usd>           Relay: daily USD cost cap (add --budget-block to reject when over; default warn)
+  --budget-block           Relay: block requests once over budget (with --budget)
   --ide <id>               Target IDE for relay (codex|cursor|windsurf); dispatches per the IdeAdapter
   --codex                  Sugar for --ide codex (wire ~/.codex/config.toml + auth.json login bypass)
   --no-auth                With --codex, keep real ChatGPT login (don't write auth.json)
@@ -166,6 +168,10 @@ async function main(): Promise<void> {
       opts.ide = args[++i];
     } else if (a === "--system" && args[i + 1]) {
       opts.system = args[++i];
+    } else if (a === "--budget" && args[i + 1]) {
+      opts.budget = Number(args[++i]);
+    } else if (a === "--budget-block") {
+      opts.budgetBlock = true;
     } else if (a === "--no-auth") {
       opts.noAuth = true;
     } else if (a === "--wire-api" && args[i + 1]) {
@@ -285,6 +291,8 @@ async function main(): Promise<void> {
         modelMap,
         fallbackModels,
         system: opts.system as string | undefined,
+        budget: opts.budget as number | undefined,
+        budgetBlock: opts.budgetBlock as boolean | undefined,
         json,
       });
       break;

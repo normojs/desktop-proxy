@@ -83,6 +83,8 @@ export interface RelayHooks {
   onRequest?: (r: RelayObservedRequest) => void;
   /** Called when the response finishes (for the traffic recorder). */
   onResponse?: (r: RelayObservedResponse) => void;
+  /** Pre-forward gate (e.g. cost budget). Return a block to reject without forwarding. */
+  beforeForward?: (info: { url: string; method: string }) => { block: boolean; status?: number; message?: string } | undefined;
 }
 
 export interface RelayHandle {
@@ -254,6 +256,18 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
       } catch {
         /* not a JSON body we can translate/rewrite — forward verbatim */
       }
+    }
+
+    // Pre-forward gate (cost budget, etc.) — reject without spending if blocked.
+    const gate = hooks.beforeForward?.({ url: target, method });
+    if (gate?.block) {
+      const status = gate.status ?? 402;
+      const message = gate.message ?? "blocked by relay policy";
+      if (!res.headersSent) res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message, type: "relay_policy" } }));
+      hooks.log("warn", `relay: blocked (${status}) ${message}`);
+      hooks.onResponse?.({ requestId: id, status, statusText: "Blocked", headers: {}, body: message });
+      return;
     }
 
     const retry = new Set(opts.retryStatuses ?? [429, 500, 502, 503]);

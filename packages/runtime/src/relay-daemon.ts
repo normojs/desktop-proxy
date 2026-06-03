@@ -20,6 +20,7 @@ import { extractUsage } from "./net/traffic-cost.js";
 import { redactEntry } from "./net/redact.js";
 import type { RelayTransforms } from "./net/transform.js";
 import type { RouteRule } from "./net/route.js";
+import { createBudgetTracker, type BudgetConfig } from "./net/budget.js";
 import { startRelayUi, type UiEntry } from "./net/relay-ui.js";
 
 const USER_ROOT = join(homedir(), ".desktop-proxy");
@@ -36,6 +37,7 @@ interface RelayCfg {
   upstreamApi?: "responses" | "chat";
   transforms?: RelayTransforms;
   routes?: RouteRule[];
+  budget?: BudgetConfig;
   /** Local dashboard port (default relay port + 1; set 0 to disable). */
   uiPort?: number;
 }
@@ -73,6 +75,7 @@ async function main(): Promise<void> {
   // In-memory ring buffer powering the local dashboard.
   const recent: UiEntry[] = [];
   const RECENT_MAX = 1000;
+  const budget = createBudgetTracker(join(LOG_DIR, "relay-budget.json"), () => r.budget);
 
   const opts: RelayOptions = {
     port: r.port ?? 8788,
@@ -89,6 +92,14 @@ async function main(): Promise<void> {
 
   const handle = await startRelay(opts, {
     log,
+    beforeForward: () => {
+      const v = budget.check();
+      if (!v.over) return undefined;
+      const msg = `relay budget exceeded: ${v.scope} $${v.spent.toFixed(4)} ≥ $${v.limit}`;
+      if (r.budget?.action === "block") return { block: true, status: 402, message: msg };
+      log("warn", msg);
+      return undefined;
+    },
     onRequest: (req) => pending.set(req.id, { method: req.method, url: req.url, headers: req.headers, body: req.body }),
     onResponse: (resp) => {
       const req = pending.get(resp.requestId);
@@ -132,6 +143,7 @@ async function main(): Promise<void> {
       writer.write(persisted);
       recent.push(persisted as UiEntry);
       if (recent.length > RECENT_MAX) recent.shift();
+      if (usage?.costUsd) budget.record(usage.costUsd);
     },
   });
 
