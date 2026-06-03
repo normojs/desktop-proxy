@@ -63,12 +63,16 @@ export interface CodexRelayOpts {
 export function applyCodexRelay(toml: string, opts: CodexRelayOpts): string {
   let out = removeCodexRelay(toml); // drop any prior managed block first (idempotent)
 
-  const prev = /^[ \t]*model_provider\s*=\s*"([^"]*)"[ \t]*$/m.exec(out);
-  if (prev) {
+  const prev = /^[ \t]*model_provider\s*=\s*"([^"]*)"[ \t]*$/m.exec(out)?.[1];
+  if (prev !== undefined && prev !== DPROX_PROVIDER) {
+    // Real previous provider — leave a breadcrumb so removal restores it.
     out = out.replace(
       /^[ \t]*model_provider\s*=\s*"[^"]*"[ \t]*$/m,
-      `# dprox: previous model_provider = "${prev[1]}"\nmodel_provider = "${DPROX_PROVIDER}"`,
+      `# dprox: previous model_provider = "${prev}"\nmodel_provider = "${DPROX_PROVIDER}"`,
     );
+  } else if (prev === DPROX_PROVIDER) {
+    // Already ours with no original to preserve — keep it, but DON'T breadcrumb "dprox".
+    out = out.replace(/^[ \t]*model_provider\s*=\s*"[^"]*"[ \t]*$/m, `model_provider = "${DPROX_PROVIDER}"`);
   } else {
     // No existing top-level model_provider — add ours at the very top.
     out = `model_provider = "${DPROX_PROVIDER}"\n${out}`;
@@ -93,10 +97,15 @@ export function removeCodexRelay(toml: string): string {
   let out = toml.replace(new RegExp(`\\n*${escapeRe(BEGIN)}[\\s\\S]*?${escapeRe(END)}\\n?`, "g"), "\n");
   const m = PREV_RE.exec(out);
   if (m) {
+    // Restore the recorded original provider.
     out = out.replace(
       new RegExp(`# dprox: previous model_provider = "[^"]*"\\n[ \\t]*model_provider\\s*=\\s*"[^"]*"`),
       `model_provider = "${m[1]}"`,
     );
+  } else {
+    // No breadcrumb: the `model_provider = "dprox"` we added had no original to
+    // restore, so drop the line entirely (back to the pre-dprox state).
+    out = out.replace(new RegExp(`^[ \\t]*model_provider\\s*=\\s*"${DPROX_PROVIDER}"[ \\t]*\\r?\\n?`, "m"), "");
   }
   return out.replace(/\n{3,}/g, "\n\n");
 }

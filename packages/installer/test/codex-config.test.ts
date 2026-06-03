@@ -76,10 +76,20 @@ describe("applyCodexRelay / removeCodexRelay", () => {
     expect(currentProvider(removeCodexRelay(twice))?.name).toBe("CodexPlusPlus");
   });
 
-  it("works when there is no existing model_provider", () => {
+  it("works when there is no existing model_provider, and removal drops it (no breadcrumb=dprox)", () => {
     const base = `[model_providers.foo]\nbase_url = "http://x/v1"\n`;
     const out = applyCodexRelay(base, { baseUrl: "http://127.0.0.1:8788/v1" });
     expect(currentProvider(out)?.name).toBe(DPROX_PROVIDER);
     expect(out.indexOf("model_provider =")).toBeLessThan(out.indexOf("["));
+
+    // Re-applying must NOT record "dprox" as the previous provider.
+    const again = applyCodexRelay(out, { baseUrl: "http://127.0.0.1:9999/v1" });
+    expect(again).not.toContain('previous model_provider = "dprox"');
+
+    // Removing restores the pre-dprox state: no model_provider key at all.
+    const removed = removeCodexRelay(again);
+    expect(removed).not.toMatch(/^[ \t]*model_provider\s*=/m);
+    expect(removed).not.toContain(DPROX_PROVIDER);
+    expect(removed).toContain("[model_providers.foo]");
   });
 });

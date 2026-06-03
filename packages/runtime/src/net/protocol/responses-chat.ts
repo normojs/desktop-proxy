@@ -180,6 +180,12 @@ export class ResponsesStreamConverter {
   private nextIndex = 0;
   private usage: Json | null = null;
   private finishReason: string | null = null;
+  // reasoning item (for reasoner models that stream `reasoning_content`)
+  private reasoningAdded = false;
+  private reasoningDone = false;
+  private reasoningIndex = 0;
+  private reasoningItemId = "";
+  private reasoning = "";
   // assistant text item
   private textAdded = false;
   private textDone = false;
@@ -274,18 +280,87 @@ export class ResponsesStreamConverter {
     if (choice) {
       const delta = choice.delta as Json | undefined;
       if (delta) {
+        // Reasoner models (e.g. deepseek-reasoner) stream reasoning separately.
+        const rc = typeof delta.reasoning_content === "string"
+          ? delta.reasoning_content
+          : typeof delta.reasoning === "string"
+            ? delta.reasoning
+            : "";
+        if (rc) out += this.pushReasoning(rc);
         const content = delta.content;
         if (typeof content === "string" && content) out += this.pushText(content);
         const toolCalls = delta.tool_calls as Json[] | undefined;
-        if (Array.isArray(toolCalls)) for (const tc of toolCalls) out += this.pushToolCall(tc);
+        if (Array.isArray(toolCalls)) {
+          out += this.finalizeReasoning();
+          for (const tc of toolCalls) out += this.pushToolCall(tc);
+        }
       }
       if (typeof choice.finish_reason === "string") this.finishReason = choice.finish_reason;
     }
     return out;
   }
 
-  private pushText(delta: string): string {
+  private pushReasoning(delta: string): string {
     let out = "";
+    if (!this.reasoningAdded) {
+      this.reasoningAdded = true;
+      this.reasoningIndex = this.nextIndex++;
+      this.reasoningItemId = `rs_${this.respId}`;
+      out += sse("response.output_item.added", {
+        type: "response.output_item.added",
+        output_index: this.reasoningIndex,
+        item: { id: this.reasoningItemId, type: "reasoning", status: "in_progress", reasoning_content: "", summary: [] },
+      });
+      out += sse("response.reasoning_summary_part.added", {
+        type: "response.reasoning_summary_part.added",
+        item_id: this.reasoningItemId,
+        output_index: this.reasoningIndex,
+        summary_index: 0,
+        part: { type: "summary_text", text: "" },
+      });
+    }
+    this.reasoning += delta;
+    out += sse("response.reasoning_summary_text.delta", {
+      type: "response.reasoning_summary_text.delta",
+      item_id: this.reasoningItemId,
+      output_index: this.reasoningIndex,
+      summary_index: 0,
+      delta,
+    });
+    return out;
+  }
+
+  private finalizeReasoning(): string {
+    if (!this.reasoningAdded || this.reasoningDone) return "";
+    this.reasoningDone = true;
+    const item: Json = {
+      id: this.reasoningItemId,
+      type: "reasoning",
+      reasoning_content: this.reasoning,
+      summary: [{ type: "summary_text", text: this.reasoning }],
+    };
+    this.outputItems.push([this.reasoningIndex, item]);
+    return (
+      sse("response.reasoning_summary_text.done", {
+        type: "response.reasoning_summary_text.done",
+        item_id: this.reasoningItemId,
+        output_index: this.reasoningIndex,
+        summary_index: 0,
+        text: this.reasoning,
+      }) +
+      sse("response.reasoning_summary_part.done", {
+        type: "response.reasoning_summary_part.done",
+        item_id: this.reasoningItemId,
+        output_index: this.reasoningIndex,
+        summary_index: 0,
+        part: { type: "summary_text", text: this.reasoning },
+      }) +
+      sse("response.output_item.done", { type: "response.output_item.done", output_index: this.reasoningIndex, item })
+    );
+  }
+
+  private pushText(delta: string): string {
+    let out = this.finalizeReasoning(); // reasoning precedes the answer
     if (!this.textAdded) {
       this.textAdded = true;
       this.textIndex = this.nextIndex++;
@@ -354,6 +429,7 @@ export class ResponsesStreamConverter {
   private finalize(): string {
     if (this.completed) return "";
     let out = this.ensureStarted();
+    out += this.finalizeReasoning();
 
     if (this.textAdded && !this.textDone) {
       this.textDone = true;

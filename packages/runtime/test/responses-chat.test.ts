@@ -80,6 +80,23 @@ describe("ResponsesStreamConverter (chat SSE → responses SSE)", () => {
     expect(out.trimEnd().endsWith("data: [DONE]")).toBe(true);
   });
 
+  it("converts a reasoner stream (reasoning_content → reasoning summary, before text)", () => {
+    const conv = new ResponsesStreamConverter();
+    let out = "";
+    out += conv.push('data: {"id":"c","choices":[{"delta":{"reasoning_content":"thinking..."}}]}\n\n');
+    out += conv.push('data: {"choices":[{"delta":{"content":"answer"}}]}\n\n');
+    out += conv.push('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+    out += conv.finish();
+
+    expect(out).toContain('"type":"reasoning"');
+    expect(out).toContain("event: response.reasoning_summary_text.delta");
+    expect(out).toContain('"delta":"thinking..."');
+    expect(out).toContain("event: response.reasoning_summary_text.done");
+    // reasoning item is closed before the text item opens
+    expect(out.indexOf("reasoning_summary_text.done")).toBeLessThan(out.indexOf("output_text.delta"));
+    expect(out).toContain('"delta":"answer"');
+  });
+
   it("converts a function tool-call stream", () => {
     const conv = new ResponsesStreamConverter();
     let out = "";
