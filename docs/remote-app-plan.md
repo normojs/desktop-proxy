@@ -78,8 +78,13 @@ both, following the system.
   CONNECT/auth + reconnect. Verify against the real server with `relay.summary`.
 - **P2 — MVP**: Pair + Overview + Model relay control (`config.get/set`). Live events.
 - **P3 — Chat**: sessions list + conversation reconstruction.
-- **P4 — Later**: composer (send → desktop injects into the IDE chat via CDP), push
-  notifications (budget/error while the app is closed).
+- **P4 — Later (deferred; observe-first for now)**: *remote drive* — make the IDE
+  "send like a user" by driving its chat over CDP (`ide.sendMessage`/`newSession`/`stop`,
+  per-IDE drive adapters + heuristics; OS-level AX as a fallback). The relay only
+  observes, so initiating a turn must drive the IDE UI; the turn then flows through the
+  relay and streams back to the phone. **RCE-class**: off by default (`config.remoteDrive`),
+  not in the default remote allowlist, with optional desktop confirmation (the reserved
+  hub→device channel) + an audit log. Plus push notifications (budget/error when closed).
 
 ## Testing
 - Pure modules (NATS protocol parse/serialize, bus envelope, nkey seed decode, chat
