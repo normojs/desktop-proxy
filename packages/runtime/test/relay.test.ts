@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { joinUpstream, buildForwardHeaders, filterResponseHeaders } from "../src/net/relay";
+import { joinUpstream, buildForwardHeaders, filterResponseHeaders, rewriteModel } from "../src/net/relay";
 
 describe("joinUpstream", () => {
   it("dedups a shared version segment (base /v1 + path /v1/...)", () => {
@@ -54,6 +54,25 @@ describe("buildForwardHeaders", () => {
     const out = buildForwardHeaders({ Authorization: "Bearer real" }, { apiKey: "sk-test" });
     expect(out.Authorization).toBe("Bearer real");
     expect(out.authorization).toBeUndefined();
+  });
+});
+
+describe("rewriteModel", () => {
+  const map = { "gpt-5.4-mini": "deepseek-v4-flash", "gpt-5.4": "deepseek-v4-pro", "gpt-5*": "deepseek-v4-pro" };
+
+  it("prefers an exact match over a wildcard", () => {
+    expect(rewriteModel("gpt-5.4-mini", map)).toBe("deepseek-v4-flash");
+    expect(rewriteModel("gpt-5.4", map)).toBe("deepseek-v4-pro");
+  });
+
+  it("falls back to a prefix wildcard", () => {
+    expect(rewriteModel("gpt-5.4-turbo", map)).toBe("deepseek-v4-pro");
+    expect(rewriteModel("gpt-5o", map)).toBe("deepseek-v4-pro");
+  });
+
+  it("returns the input unchanged when nothing matches", () => {
+    expect(rewriteModel("deepseek-v4-pro", map)).toBe("deepseek-v4-pro");
+    expect(rewriteModel("claude-4", {})).toBe("claude-4");
   });
 });
 

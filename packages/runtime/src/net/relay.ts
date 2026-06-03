@@ -48,6 +48,19 @@ export interface RelayOptions {
   apiKey?: string;
   /** Cap on recorded body size (bytes). 0 = unlimited. */
   maxBodyBytes?: number;
+  /**
+   * Rewrite the JSON body's `model` before forwarding. Keys may be exact
+   * ("gpt-5.4") or a `prefix*` wildcard ("gpt-5*"); first match wins. Fixes IDEs
+   * that send model names the upstream rejects (e.g. Codex → DeepSeek backend).
+   */
+  modelMap?: Record<string, string>;
+  /**
+   * If the (rewritten) request errors with a `retryStatuses` code, retry the
+   * same request with each of these models in order until one is accepted.
+   */
+  fallbackModels?: string[];
+  /** Status codes that trigger failover to the next fallback model. */
+  retryStatuses?: number[];
 }
 
 export interface RelayHooks {
@@ -103,6 +116,19 @@ export function buildForwardHeaders(
     out["authorization"] = `Bearer ${opts.apiKey}`;
   }
   return out;
+}
+
+/**
+ * Resolve a model name through a rewrite map. Exact key wins; otherwise the
+ * first `prefix*` wildcard whose prefix matches. Returns the input unchanged
+ * when nothing matches.
+ */
+export function rewriteModel(model: string, map: Record<string, string>): string {
+  if (Object.prototype.hasOwnProperty.call(map, model)) return map[model];
+  for (const [k, v] of Object.entries(map)) {
+    if (k.endsWith("*") && model.startsWith(k.slice(0, -1))) return v;
+  }
+  return model;
 }
 
 /** Strip hop-by-hop/length/encoding from the upstream response before relaying. */
@@ -177,26 +203,81 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
       reqTotal += buf.length;
     }
     const reqBuf = Buffer.concat(reqChunks, reqTotal);
-    const fwdHeaders = buildForwardHeaders(flattenIncoming(req.headers), { apiKey: opts.apiKey });
+    const incoming = flattenIncoming(req.headers);
+    const fwdHeaders = buildForwardHeaders(incoming, { apiKey: opts.apiKey });
+    const isBodyless = method === "GET" || method === "HEAD";
 
-    const reqDecoded = decodeBody(reqBuf.subarray(0, cap > 0 ? cap : reqBuf.length));
-    hooks.onRequest?.({ id, method, url: target, headers: fwdHeaders, ...reqDecoded });
-
-    let upstream: Dispatcher.ResponseData;
-    try {
-      upstream = await undiciRequest(target, {
-        method: method as Dispatcher.HttpMethod,
-        headers: fwdHeaders,
-        body: method === "GET" || method === "HEAD" ? undefined : reqBuf,
-        dispatcher,
-      });
-    } catch (e) {
-      hooks.log("warn", `relay: upstream failed ${target}: ${String(e)}`);
-      if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: { message: `relay upstream failed: ${String(e)}` } }));
-      hooks.onResponse?.({ requestId: id, status: 502, statusText: "Bad Gateway", headers: {}, body: String(e) });
-      return;
+    // Build the candidate model list from a JSON body: the mapped model first,
+    // then any fallbacks. `baseObj` lets us re-serialize per attempt.
+    let baseObj: Record<string, unknown> | null = null;
+    let originalModel: string | null = null;
+    let candidates: string[] = [];
+    if (!isBodyless && reqBuf.length > 0 && /json/i.test(incoming["content-type"] ?? "")) {
+      try {
+        const parsed = JSON.parse(reqBuf.toString("utf8")) as Record<string, unknown>;
+        if (typeof parsed.model === "string") {
+          baseObj = parsed;
+          originalModel = parsed.model;
+          const mapped = rewriteModel(parsed.model, opts.modelMap ?? {});
+          candidates = [mapped, ...(opts.fallbackModels ?? []).filter((m) => m !== mapped)];
+        }
+      } catch {
+        /* not a JSON body we can rewrite — forward verbatim */
+      }
     }
+
+    const retry = new Set(opts.retryStatuses ?? [429, 500, 502, 503]);
+    const attempts: (string | null)[] = candidates.length > 0 ? candidates : [null];
+
+    let upstream: Dispatcher.ResponseData | null = null;
+    let sentBody = reqBuf;
+    let sentModel = originalModel;
+
+    for (let i = 0; i < attempts.length; i++) {
+      const m = attempts[i];
+      if (m !== null && baseObj) {
+        baseObj.model = m;
+        sentBody = Buffer.from(JSON.stringify(baseObj));
+        sentModel = m;
+      }
+      try {
+        upstream = await undiciRequest(target, {
+          method: method as Dispatcher.HttpMethod,
+          headers: fwdHeaders,
+          body: isBodyless ? undefined : sentBody,
+          dispatcher,
+        });
+      } catch (e) {
+        if (i < attempts.length - 1) {
+          hooks.log("warn", `relay: attempt "${sentModel}" failed (${String(e)}); trying next`);
+          continue;
+        }
+        hooks.log("warn", `relay: upstream failed ${target}: ${String(e)}`);
+        if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: `relay upstream failed: ${String(e)}` } }));
+        hooks.onResponse?.({ requestId: id, status: 502, statusText: "Bad Gateway", headers: {}, body: String(e) });
+        return;
+      }
+      if (i < attempts.length - 1 && retry.has(upstream.statusCode)) {
+        hooks.log("info", `relay: model "${sentModel}" → ${upstream.statusCode}; failing over to "${attempts[i + 1]}"`);
+        try {
+          await upstream.body.dump();
+        } catch {
+          /* ignore drain error */
+        }
+        continue;
+      }
+      break;
+    }
+    if (!upstream) return; // unreachable, but satisfies the type checker
+
+    if (originalModel && sentModel !== originalModel) {
+      hooks.log("info", `relay: rewrote model "${originalModel}" → "${sentModel}"`);
+    }
+
+    // Record the request as actually forwarded (post-rewrite), paired with the response.
+    const reqDecoded = decodeBody(sentBody.subarray(0, cap > 0 ? cap : sentBody.length));
+    hooks.onRequest?.({ id, method, url: target, headers: fwdHeaders, ...reqDecoded });
 
     const resHeaders = flattenUndici(upstream.headers as Record<string, string | string[] | undefined>);
     res.writeHead(upstream.statusCode, filterResponseHeaders(resHeaders));

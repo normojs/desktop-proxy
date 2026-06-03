@@ -101,6 +101,22 @@ function aiService(host: string): string | null {
   return null;
 }
 
+/**
+ * Best-effort provider name from a model id — used when the host can't identify
+ * the service (e.g. relay traffic to a localhost upstream like 127.0.0.1:57321).
+ */
+function modelService(model: string | undefined): string | null {
+  if (!model) return null;
+  if (/^deepseek/i.test(model)) return "DeepSeek";
+  if (/^claude/i.test(model)) return "Anthropic";
+  if (/^gemini/i.test(model)) return "Google AI";
+  if (/^grok/i.test(model)) return "xAI";
+  if (/^(mistral|mixtral|codestral|ministral)/i.test(model)) return "Mistral";
+  if (/^(gpt-|o\d|chatgpt|text-embedding|davinci|babbage)/i.test(model)) return "OpenAI";
+  if (/^(qwen|llama|yi-|glm-|moonshot|kimi)/i.test(model)) return "Open model";
+  return null;
+}
+
 export function analyzeEntry(e: AnalyzeInput): Analysis {
   const host = hostOf(e.url);
   const path = pathOf(e.url);
@@ -112,6 +128,7 @@ export function analyzeEntry(e: AnalyzeInput): Analysis {
   const model = typeof reqJson?.model === "string" ? (reqJson.model as string) : undefined;
   const streaming = reqJson?.stream === true || kind === "sse";
   if (streaming) tags.push("stream");
+  if (e.source === "relay") tags.push("relay");
   if (typeof e.status === "number" && e.status >= 400) tags.push("error");
   if (e.reqHeaders && (e.reqHeaders.authorization || e.reqHeaders.Authorization || e.reqHeaders["x-api-key"])) {
     tags.push("auth");
@@ -122,9 +139,9 @@ export function analyzeEntry(e: AnalyzeInput): Analysis {
   let category: Category;
   let service: string;
 
-  if (ai || AI_PATH.test(path)) {
+  if (ai || AI_PATH.test(path) || e.source === "relay") {
     category = "ai";
-    service = ai ?? host;
+    service = ai ?? modelService(model) ?? host;
   } else if (kind === "ws") {
     category = "websocket";
     service = host;

@@ -50,4 +50,18 @@ describe("analyzeEntry — category & service", () => {
     expect(a.category).toBe("other");
     expect(a.tags).toContain("error");
   });
+
+  it("classifies relay traffic to a localhost upstream as AI, naming the service from the model", () => {
+    const a = analyzeEntry({
+      method: "POST",
+      url: "http://127.0.0.1:57321/v1/responses",
+      source: "relay",
+      postData: '{"model":"deepseek-v4-flash","stream":true}',
+      status: 200,
+    });
+    expect(a.category).toBe("ai");
+    expect(a.service).toBe("DeepSeek");
+    expect(a.model).toBe("deepseek-v4-flash");
+    expect(a.tags).toContain("relay");
+  });
 });

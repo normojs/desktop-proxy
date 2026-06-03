@@ -56,13 +56,37 @@ function priceFor(model: string | undefined, prompt: number, completion: number)
   return undefined;
 }
 
-/** Extract token usage + estimated cost from an LLM response body. */
-export function extractUsage(model: string | undefined, resBody: string | null | undefined): Usage | null {
-  const res = parseJson(resBody);
-  if (!res) return null;
+/** Pull a usage object from a parsed payload (top-level or nested under response). */
+function pickUsage(obj: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!obj) return null;
+  const nested = (obj.response as Record<string, unknown> | undefined)?.usage;
+  const u = (obj.usage ?? obj.usageMetadata ?? nested) as Record<string, unknown> | undefined;
+  return u && typeof u === "object" ? u : null;
+}
 
-  const u = (res.usage ?? res.usageMetadata) as Record<string, unknown> | undefined;
-  if (!u || typeof u !== "object") return null;
+/**
+ * Extract token usage + estimated cost from an LLM response body. Handles a plain
+ * JSON body and a Server-Sent Events stream (e.g. the OpenAI "responses"/chat
+ * streaming APIs, where usage rides on a late `response.completed`/final chunk).
+ */
+export function extractUsage(model: string | undefined, resBody: string | null | undefined): Usage | null {
+  if (!resBody) return null;
+
+  let u: Record<string, unknown> | null = null;
+  if (/(^|\n)\s*data:/.test(resBody) || /(^|\n)\s*event:/.test(resBody)) {
+    // SSE: scan `data:` payloads; keep the last one that carries usage.
+    for (const line of resBody.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t.startsWith("data:")) continue;
+      const payload = t.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      const found = pickUsage(parseJson(payload));
+      if (found) u = found;
+    }
+  } else {
+    u = pickUsage(parseJson(resBody));
+  }
+  if (!u) return null;
 
   const prompt = num(u.prompt_tokens) ?? num(u.input_tokens) ?? num(u.promptTokenCount);
   const completion = num(u.completion_tokens) ?? num(u.output_tokens) ?? num(u.candidatesTokenCount);

@@ -30,6 +30,8 @@ interface RelayCfg {
   upstream?: string;
   proxy?: string;
   apiKey?: string;
+  modelMap?: Record<string, string>;
+  fallbackModels?: string[];
 }
 interface Config {
   relay?: RelayCfg;
@@ -62,6 +64,10 @@ export interface RelayOptions {
   proxy?: string;
   codex?: boolean;
   json?: boolean;
+  /** model rewrite map (exact or `prefix*`). */
+  modelMap?: Record<string, string>;
+  /** ordered fallback models if the request errors. */
+  fallbackModels?: string[];
 }
 
 export function relay(sub: RelaySubcommand, opts: RelayOptions = {}): void {
@@ -96,16 +102,24 @@ function relayOn(opts: RelayOptions): void {
     process.exit(1);
   }
 
+  const localBase = `http://127.0.0.1:${port}/v1`;
+  // Guard against pointing the relay at itself (e.g. re-running --codex when the
+  // active provider is already ours): that would be an infinite loop.
+  if (upstream.replace(/\/+$/, "") === localBase.replace(/\/+$/, "")) {
+    console.error(`\n  Error: upstream "${upstream}" is the relay itself (self-loop). Pass --upstream <real upstream>.\n`);
+    process.exit(1);
+  }
+
   cfg.relay = {
     enabled: true,
     port,
     upstream,
     proxy: opts.proxy ?? cfg.relay?.proxy,
     apiKey: opts.key ?? cfg.relay?.apiKey,
+    modelMap: opts.modelMap ?? cfg.relay?.modelMap,
+    fallbackModels: opts.fallbackModels ?? cfg.relay?.fallbackModels,
   };
   writeConfig(cfg);
-
-  const localBase = `http://127.0.0.1:${port}/v1`;
 
   if (opts.codex) {
     const bak = `${CODEX_CONFIG}.dprox-bak-${stamp()}`;
@@ -120,6 +134,10 @@ function relayOn(opts: RelayOptions): void {
   console.log(`    Listen:   ${localBase}`);
   console.log(`    Upstream: ${upstream}`);
   if (cfg.relay.proxy) console.log(`    Proxy:    ${cfg.relay.proxy}`);
+  if (cfg.relay.modelMap && Object.keys(cfg.relay.modelMap).length) {
+    console.log(`    Model map: ${Object.entries(cfg.relay.modelMap).map(([k, v]) => `${k}→${v}`).join(", ")}`);
+  }
+  if (cfg.relay.fallbackModels?.length) console.log(`    Fallback:  ${cfg.relay.fallbackModels.join(", ")}`);
   console.log(`\n  The relay runs inside the injected app (applied live via the config watcher).`);
   console.log(`  Restart the target app so its core re-reads config and dials the relay.`);
   if (opts.codex) console.log(`  For Codex, relaunch via Codex++ so its downstream relay is up too.`);
@@ -163,6 +181,10 @@ function relayStatus(opts: RelayOptions): void {
   console.log(`  Listen:   http://127.0.0.1:${r.port ?? DEFAULT_PORT}/v1`);
   console.log(`  Upstream: ${r.upstream ?? "(unset)"}`);
   console.log(`  Proxy:    ${r.proxy ?? "(none)"}`);
+  if (r.modelMap && Object.keys(r.modelMap).length) {
+    console.log(`  Model map: ${Object.entries(r.modelMap).map(([k, v]) => `${k}→${v}`).join(", ")}`);
+  }
+  if (r.fallbackModels?.length) console.log(`  Fallback:  ${r.fallbackModels.join(", ")}`);
   if (codexExists) {
     console.log(`\n  Codex config.toml:`);
     console.log(`    Active provider: ${prov?.name ?? "(none)"} → ${prov?.baseUrl ?? "(no base_url)"}`);

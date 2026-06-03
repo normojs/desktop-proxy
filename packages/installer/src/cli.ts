@@ -76,6 +76,8 @@ Options:
   --key <token>            Relay bearer token to inject if absent (relay on)
   --port <n>               Relay local port (relay on; default 8788)
   --proxy <url>            Relay outbound proxy, e.g. http://127.0.0.1:7897 (relay on)
+  --map <k=v,...>          Relay model rewrite, e.g. "gpt-5*=deepseek-v4-pro" (relay on)
+  --fallback <m,...>       Relay fallback models to retry on error (relay on)
   --codex                  Also wire ~/.codex/config.toml (relay on/off)
   --id/--name/--scope <v>  create-plugin manifest fields
   --json            Machine-readable output (doctor, plugin/config/validate)
@@ -91,6 +93,19 @@ Examples:
   desktop-proxy plugin disable com.desktop-proxy.request-interceptor
   desktop-proxy config set logLevel debug
 `);
+}
+
+/** Parse a "k=v,k2=v2" model-map string into an object. */
+function parseModelMap(spec: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const pair of spec.split(",")) {
+    const idx = pair.indexOf("=");
+    if (idx <= 0) continue;
+    const k = pair.slice(0, idx).trim();
+    const v = pair.slice(idx + 1).trim();
+    if (k && v) out[k] = v;
+  }
+  return out;
 }
 
 function toggleSafeMode(enabled: boolean): void {
@@ -134,6 +149,10 @@ async function main(): Promise<void> {
       opts.port = Number(args[++i]);
     } else if (a === "--proxy" && args[i + 1]) {
       opts.proxy = args[++i];
+    } else if (a === "--map" && args[i + 1]) {
+      opts.map = args[++i];
+    } else if (a === "--fallback" && args[i + 1]) {
+      opts.fallback = args[++i];
     } else if (a === "--codex") {
       opts.codex = true;
     } else if (a === "--strict-ssl") {
@@ -222,12 +241,19 @@ async function main(): Promise<void> {
         console.error(`Unknown relay subcommand "${sub}". Use: on | off | status.`);
         process.exit(1);
       }
+      const modelMap = typeof opts.map === "string" ? parseModelMap(opts.map) : undefined;
+      const fallbackModels =
+        typeof opts.fallback === "string"
+          ? opts.fallback.split(",").map((s) => s.trim()).filter(Boolean)
+          : undefined;
       relay(sub, {
         upstream: opts.upstream as string | undefined,
         key: opts.key as string | undefined,
         port: opts.port as number | undefined,
         proxy: opts.proxy as string | undefined,
         codex: opts.codex as boolean | undefined,
+        modelMap,
+        fallbackModels,
         json,
       });
       break;

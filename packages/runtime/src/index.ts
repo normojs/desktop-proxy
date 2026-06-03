@@ -226,6 +226,10 @@ interface Config {
     proxy?: string;
     /** Inject Authorization: Bearer <key> when the client didn't send one. */
     apiKey?: string;
+    /** Rewrite the request body's `model` (exact or `prefix*`) before forwarding. */
+    modelMap?: Record<string, string>;
+    /** Retry with these models (in order) if the request errors. */
+    fallbackModels?: string[];
   };
   /** Stable id for this install, used in NATS subjects (auto-generated). */
   instanceId?: string;
@@ -484,7 +488,9 @@ async function syncRelay(): Promise<void> {
     const cfg = readConfig();
     const r = cfg.relay;
     const want = r?.enabled === true && typeof r.upstream === "string" && r.upstream.length > 0;
-    const key = want ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0 }) : "";
+    const key = want
+      ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0, m: r!.modelMap ?? {}, f: r!.fallbackModels ?? [] })
+      : "";
     if (key === _relayKey) return; // unchanged
 
     if (_relay) {
@@ -502,6 +508,8 @@ async function syncRelay(): Promise<void> {
         upstream: r!.upstream!,
         proxy: r!.proxy,
         apiKey: r!.apiKey,
+        modelMap: r!.modelMap,
+        fallbackModels: r!.fallbackModels,
         maxBodyBytes: readConfig().maxResponseBodyBytes ?? 1024 * 1024,
       },
       {

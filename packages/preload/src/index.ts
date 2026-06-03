@@ -20,6 +20,7 @@ import { startPluginHost, teardownPluginHost, setSettingsCallbacks, setLogLevel,
 import { installSettingsOverlay, type SettingsOverlayHandle } from "./settings-overlay";
 import { registerManagementPage } from "./management-page";
 import { registerTrafficPage } from "./traffic-page";
+import { registerRelayPage } from "./relay-page";
 
 // ── Electron IPC ─────────────────────────────────────────────────────────────
 // In a sandboxed preload context, we can still require("electron") to get ipcRenderer.
@@ -120,6 +121,7 @@ function boot(): void {
       setSettingsCallbacks(overlay.registerSection, overlay.registerPage);
       registerManagementPage(overlay, getIpcRenderer());
       registerTrafficPage(overlay);
+      registerRelayPage(overlay);
       fileLog("settings overlay installed");
     }
   } catch (e) {
@@ -159,6 +161,7 @@ getIpcRenderer().on(ch("plugins-changed"), () => {
       if (overlay) {
         registerManagementPage(overlay, getIpcRenderer());
         registerTrafficPage(overlay);
+        registerRelayPage(overlay);
       }
       await startPluginHost();
       fileLog("hot-reload complete");

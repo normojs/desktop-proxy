@@ -32,4 +32,31 @@ describe("extractUsage", () => {
     expect(extractUsage("gpt-4o", "not json")).toBeNull();
     expect(extractUsage("gpt-4o", null)).toBeNull();
   });
+
+  it("parses usage from an SSE responses-API stream (nested response.usage)", () => {
+    const sse = [
+      'event: response.created',
+      'data: {"type":"response.created","response":{"id":"r1"}}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"id":"r1","usage":{"input_tokens":1200,"output_tokens":300}}}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join("\n");
+    const u = extractUsage("deepseek-v4-pro", sse);
+    expect(u).toMatchObject({ promptTokens: 1200, completionTokens: 300, totalTokens: 1500 });
+    // DeepSeek price table → cost computed.
+    expect(u!.costUsd).toBeGreaterThan(0);
+  });
+
+  it("parses usage from an SSE chat-completions stream (final chunk)", () => {
+    const sse = [
+      'data: {"choices":[{"delta":{"content":"hi"}}]}',
+      'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":40,"completion_tokens":12}}',
+      'data: [DONE]',
+    ].join("\n");
+    const u = extractUsage("gpt-4o", sse);
+    expect(u).toMatchObject({ promptTokens: 40, completionTokens: 12, totalTokens: 52 });
+  });
 });
