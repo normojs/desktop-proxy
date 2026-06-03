@@ -63,7 +63,13 @@ ensure() { local cmd="$1" pkg="${2:-$1}"; need "$cmd" && return 0
   say "Installing dependency: $pkg"; pkg_install "$pkg" || { echo "!! Could not auto-install '$pkg'."; exit 1; }
   need "$cmd" || { echo "!! '$cmd' still missing."; exit 1; }; }
 
-say "desktop-proxy NATS (Docker) setup — TLS=$TLS, host=$HOST_ADDR${PROXY:+, proxy=$PROXY}${DOCKER_MIRROR:+, registry=$DOCKER_MIRROR}"
+say "desktop-proxy NATS (Docker) setup — TLS=$TLS, host=$HOST_ADDR:$PORT/$WS_PORT${PROXY:+, proxy=$PROXY}${DOCKER_MIRROR:+, registry=$DOCKER_MIRROR}"
+
+# Free ports from a host nats-server (systemd) created by earlier, pre-Docker runs.
+if need systemctl && systemctl is-enabled nats >/dev/null 2>&1; then
+  say "Stopping old systemd 'nats' service (this build is Docker-only)"
+  $SUDO systemctl disable --now nats >/dev/null 2>&1 || true
+fi
 
 # ── 1. host deps + nsc ───────────────────────────────────────────────────────
 ensure curl
