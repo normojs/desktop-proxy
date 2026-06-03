@@ -185,40 +185,61 @@ export function readAppVersion(install: CodexInstall): string | null {
   return null;
 }
 
+type IntegrityDict = Record<string, { algorithm?: string; hash?: string }>;
+
 /**
- * Read the ElectronAsarIntegrity entry from Info.plist (macOS).
+ * Pick the asar entry inside an ElectronAsarIntegrity dict. The key is the asar's
+ * path *relative to Contents* (e.g. "Resources/app.asar") — note it contains a
+ * dot, which is why we operate on the whole dict instead of a plutil keypath.
  */
-export function readIntegrity(install: CodexInstall): string | null {
-  if (!install.metaPath || !existsSync(install.metaPath)) return null;
+function pickAsarKey(dict: IntegrityDict): string | null {
+  if (!dict || typeof dict !== "object") return null;
+  if ("Resources/app.asar" in dict) return "Resources/app.asar";
+  const appAsar = Object.keys(dict).find((k) => k.endsWith("app.asar"));
+  if (appAsar) return appAsar;
+  const all = Object.keys(dict);
+  return all.length ? all[0] : null;
+}
+
+/** Read the whole ElectronAsarIntegrity dict from Info.plist (macOS), or null. */
+function readIntegrityDict(metaPath: string): IntegrityDict | null {
   try {
-    const out = execFileSync(
-      "plutil",
-      ["-extract", "ElectronAsarIntegrity.Resources/app.asar.hash", "raw", install.metaPath],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
-    return out.trim() || null;
+    const out = execFileSync("plutil", ["-extract", "ElectronAsarIntegrity", "json", "-o", "-", metaPath], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return JSON.parse(out) as IntegrityDict;
   } catch {
-    return null;
+    return null; // key absent → the app doesn't use asar integrity
   }
 }
 
 /**
- * Update the ElectronAsarIntegrity hash in Info.plist.
+ * Read the ElectronAsarIntegrity hash for app.asar from Info.plist (macOS).
+ */
+export function readIntegrity(install: CodexInstall): string | null {
+  if (!install.metaPath || !existsSync(install.metaPath)) return null;
+  const dict = readIntegrityDict(install.metaPath);
+  if (!dict) return null;
+  const key = pickAsarKey(dict);
+  return key ? dict[key]?.hash ?? null : null;
+}
+
+/**
+ * Update the ElectronAsarIntegrity hash in Info.plist. Replaces the *entire*
+ * dict (the asar key contains a dot, which plutil keypaths can't address), while
+ * preserving any other entries. No-op when the app has no integrity dict.
  */
 export function writeIntegrity(install: CodexInstall, hash: string): void {
   if (!install.metaPath) return;
+  const dict = readIntegrityDict(install.metaPath);
+  if (!dict) return; // app ships no asar integrity — nothing to maintain
+  const key = pickAsarKey(dict) ?? "Resources/app.asar";
+  dict[key] = { algorithm: "SHA256", hash };
   try {
-    execFileSync(
-      "plutil",
-      [
-        "-replace",
-        "ElectronAsarIntegrity.Resources/app.asar",
-        "-json",
-        JSON.stringify({ algorithm: "SHA256", hash }),
-        install.metaPath,
-      ],
-      { stdio: "ignore" },
-    );
+    execFileSync("plutil", ["-replace", "ElectronAsarIntegrity", "-json", JSON.stringify(dict), install.metaPath], {
+      stdio: "ignore",
+    });
   } catch (e) {
     throw new Error(`Failed to update ElectronAsarIntegrity in Info.plist: ${String(e)}`);
   }

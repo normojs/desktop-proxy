@@ -312,8 +312,9 @@ module.exports = {
 | `api.settings` | `registerSection` / `registerPage`，渲染到框架的浮层面板。 |
 | `api.react` | `getFiber` / `findOwnerByName` / `waitForElement`（渲染进程）。 |
 | `api.ipc` | 主进程与渲染进程间带命名空间的 `on` / `send` / `invoke`。 |
+| `api.events` | 发布/订阅总线（`on(topic)` / `emit(topic, data)`），经主进程路由，贯通 主 ↔ 所有渲染进程 ↔ 插件；框架会发布 `config:changed` / `plugins:changed`。底层为统一消息路由（事件与 RPC **同一套协议**，应用内走 Electron IPC，配对手机/CLI 时可走 NATS）。内置页面与 `api.fs` 共用该路由；主进程侧白名单（`config`/`plugin`/`traffic` 方法）限定远程对端可调用范围，被拒的远程 RPC 立即返回 `forbidden`。 |
 | `api.network` | `onRequest` / `onResponse` 观察钩子；`intercept(handler, filter?)` 请求控制（`continue 改写` / `fulfill mock` / `fail 拦阻`）；`interceptResponse(handler, filter?)` 改写真实响应；`transformStream(filter, fn, opts?)` **流式安全地改写流式响应**。观察为流式安全、按 `maxResponseBodyBytes` 截断、二进制跳过、带 `source` 标签。主作用域插件还能看到 `webRequest` 看不到的主进程 Node 流量——`http`/`https`、全局 `fetch`（undici）、`http2`；开启 `cdpNetwork` 后经 CDP 看到所有渲染层请求。`intercept`/`interceptResponse` 在开启 `cdpIntercept` 后经 CDP Fetch 执行——**仅被 `interceptResponse` 命中的 URL 会被缓冲改写**，其余保持流式。主作用域与渲染作用域插件都可注册：渲染端处理器在其渲染进程运行，主进程把每次暂停经 IPC 转给它（先问主作用域）。`transformStream`（开启 `cdpStreamTransform`）注入主世界包裹器，把命中响应体接到 `TransformStream`，逐块或逐 SSE 事件执行你的 `fn`——返回替换内容、`null` 丢弃、`undefined` 透传；`opts.emit`/`opts.onEmit` 把观察数据回流主进程。`onWebSocket(handler)` 经 CDP 被动观察 WebSocket 生命周期/帧（open/sent/received/close/error，开启 `cdpNetwork`）。`transformWebSocket(filter, fn, opts?)`（开启 `cdpWsTransform`）在主世界**双向**改写 WS 文本帧（按 `ctx.direction` 区分 `"send"`/`"receive"`）——返回替换内容、`null` 丢弃、`undefined` 透传（二进制帧不动）。 |
-| `api.fs` | 限定在插件数据目录内的沙盒文件 I/O：`read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat`（utf8 或 base64）。 |
+| `api.fs` | 限定在插件数据目录内的沙盒文件 I/O：`read` / `write` / `exists` / `list` / `delete` / `mkdir` / `stat`（utf8 或 base64）。走统一总线，但**仅限应用内**——不在远程白名单中，配对的手机/CLI 无法触达桌面文件系统。 |
 | `api.cdp` | Chrome DevTools Protocol：`attach`/`send`/`on`/`evaluate`，外加 `onResponse`/`onRequestPaused` 便捷封装。渲染进程指向自身 webContents；主进程指向聚焦窗口。需要 `"cdp"` 权限。 |
 | `api.ui` | DOM 辅助：`injectCSS()`（返回移除函数）与 `toast()`（宿主隔离的通知）。 |
 | `api.app` | `getInfo()` 与 `getWindows()`。 |

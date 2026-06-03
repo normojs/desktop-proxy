@@ -157,4 +157,20 @@ describe("BusRouter", () => {
     a.publish("ok.x", 1);
     expect(seen).toEqual(["ok"]);
   });
+
+  it("rejects a denied RPC fast with a forbidden error (no timeout)", async () => {
+    const a = createBusRouter();
+    const b = createBusRouter({
+      // Only allow the "safe.*" method namespace from the wire.
+      canReceive: (env) => env.kind !== "req" || env.method.startsWith("safe."),
+    });
+    const [ta, tb] = link();
+    a.addTransport("wire", ta);
+    b.addTransport("wire", tb);
+    b.handle("safe.ping", () => "pong");
+    b.handle("secret.read", () => "leaked");
+
+    await expect(a.request("safe.ping")).resolves.toBe("pong");
+    await expect(a.request("secret.read")).rejects.toThrow(/forbidden/);
+  });
 });

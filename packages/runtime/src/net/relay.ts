@@ -1,0 +1,251 @@
+/**
+ * Local capture + control relay (cornerstone of the model-control layer).
+ *
+ * A small HTTP server the IDE's model client points at (e.g. Codex's Rust core
+ * via `~/.codex/config.toml` `base_url`). It forwards each request to a
+ * configured upstream — optionally through a proxy (e.g. `http://127.0.0.1:7897`
+ * for CN networks) — streams the response back, and feeds the framework's
+ * traffic recorder so the model traffic shows up in the Network inspector and
+ * streams to a paired phone over the bus.
+ *
+ * Why this exists: out-of-process model clients (Codex's `codex app-server`,
+ * Windsurf's `language_server`) are invisible to Electron injection, so the only
+ * way to observe/redirect/race their model requests is to redirect them here.
+ *
+ * Forwarding uses `undici.request` (not global `fetch`/`http`) on purpose: our
+ * own Node interceptor patches `fetch`/`http`/`https`, and undici's separate
+ * socket stack bypasses it, so the relay never captures or races itself.
+ */
+
+import http from "node:http";
+import { request as undiciRequest, ProxyAgent, type Dispatcher } from "undici";
+
+export interface RelayObservedRequest {
+  id: string;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: string | null;
+  bodyEncoding: "utf8" | "base64";
+}
+
+export interface RelayObservedResponse {
+  requestId: string;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: string | null;
+}
+
+export interface RelayOptions {
+  /** Local port to listen on (127.0.0.1 only). 0 = ephemeral. */
+  port: number;
+  /** Upstream base URL, e.g. "https://api.openai.com/v1" or "http://127.0.0.1:57321/v1". */
+  upstream: string;
+  /** Optional outbound proxy, e.g. "http://127.0.0.1:7897". */
+  proxy?: string;
+  /** Inject "Authorization: Bearer <key>" when the client didn't send one. */
+  apiKey?: string;
+  /** Cap on recorded body size (bytes). 0 = unlimited. */
+  maxBodyBytes?: number;
+}
+
+export interface RelayHooks {
+  log: (level: string, ...args: unknown[]) => void;
+  /** Called when a request is received (for the traffic recorder). */
+  onRequest?: (r: RelayObservedRequest) => void;
+  /** Called when the response finishes (for the traffic recorder). */
+  onResponse?: (r: RelayObservedResponse) => void;
+}
+
+export interface RelayHandle {
+  port: number;
+  close(): Promise<void>;
+}
+
+// Hop-by-hop / length / encoding headers that must not be forwarded verbatim.
+const STRIP_REQ = new Set(["host", "connection", "keep-alive", "proxy-connection", "content-length", "transfer-encoding", "accept-encoding"]);
+const STRIP_RES = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "content-length", "content-encoding"]);
+
+/**
+ * Join an upstream base URL with the incoming request path. If both carry the
+ * same version segment (e.g. base `…/v1` + path `/v1/responses`), the duplicate
+ * is dropped so the result is `…/v1/responses`, not `…/v1/v1/responses`.
+ */
+export function joinUpstream(upstream: string, reqUrl: string): string {
+  const base = upstream.replace(/\/+$/, "");
+  let path = reqUrl || "/";
+  const baseTail = /\/(v\d+)$/.exec(base)?.[1];
+  if (baseTail && new RegExp(`^/${baseTail}(/|$|\\?)`).test(path)) {
+    path = path.replace(new RegExp(`^/${baseTail}`), "");
+  }
+  if (path === "") return base;
+  if (!path.startsWith("/")) path = `/${path}`;
+  return base + path;
+}
+
+/**
+ * Build the forwarded request headers: drop hop-by-hop/length/encoding, force
+ * `accept-encoding: identity` (so the body stays readable for capture and a
+ * verbatim passthrough is correct), and inject auth if absent.
+ */
+export function buildForwardHeaders(
+  incoming: Record<string, string>,
+  opts: { apiKey?: string } = {},
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(incoming)) {
+    if (STRIP_REQ.has(k.toLowerCase())) continue;
+    out[k] = v;
+  }
+  out["accept-encoding"] = "identity";
+  if (opts.apiKey && !Object.keys(out).some((k) => k.toLowerCase() === "authorization")) {
+    out["authorization"] = `Bearer ${opts.apiKey}`;
+  }
+  return out;
+}
+
+/** Strip hop-by-hop/length/encoding from the upstream response before relaying. */
+export function filterResponseHeaders(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (STRIP_RES.has(k.toLowerCase())) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+function flattenIncoming(headers: http.IncomingHttpHeaders): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (v === undefined) continue;
+    out[k] = Array.isArray(v) ? v.join(", ") : String(v);
+  }
+  return out;
+}
+
+function flattenUndici(headers: Record<string, string | string[] | undefined>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (v === undefined) continue;
+    out[k] = Array.isArray(v) ? v.join(", ") : String(v);
+  }
+  return out;
+}
+
+function decodeBody(buf: Buffer): { body: string | null; bodyEncoding: "utf8" | "base64" } {
+  if (buf.length === 0) return { body: null, bodyEncoding: "utf8" };
+  // Heuristic: if it round-trips as UTF-8, store text; otherwise base64.
+  const text = buf.toString("utf8");
+  if (Buffer.from(text, "utf8").equals(buf)) return { body: text, bodyEncoding: "utf8" };
+  return { body: buf.toString("base64"), bodyEncoding: "base64" };
+}
+
+let counter = 0;
+function newId(): string {
+  counter = (counter + 1) % 1_000_000;
+  return `relay-${Date.now().toString(36)}-${counter.toString(36)}`;
+}
+
+/**
+ * Start the relay server. Resolves once it is listening. Forwarding bypasses the
+ * framework's own fetch/http patches (undici), so it never self-captures.
+ */
+export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<RelayHandle> {
+  const cap = opts.maxBodyBytes ?? 1024 * 1024;
+  const dispatcher: Dispatcher | undefined = opts.proxy ? new ProxyAgent(opts.proxy) : undefined;
+
+  const server = http.createServer((req, res) => {
+    void handle(req, res).catch((e) => {
+      hooks.log("warn", `relay: handler error: ${String(e)}`);
+      if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
+      if (!res.writableEnded) res.end(JSON.stringify({ error: { message: `relay error: ${String(e)}` } }));
+    });
+  });
+
+  async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const id = newId();
+    const target = joinUpstream(opts.upstream, req.url ?? "/");
+    const method = (req.method ?? "GET").toUpperCase();
+
+    // Buffer the (small) request body.
+    const reqChunks: Buffer[] = [];
+    let reqTotal = 0;
+    for await (const chunk of req) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      reqChunks.push(buf);
+      reqTotal += buf.length;
+    }
+    const reqBuf = Buffer.concat(reqChunks, reqTotal);
+    const fwdHeaders = buildForwardHeaders(flattenIncoming(req.headers), { apiKey: opts.apiKey });
+
+    const reqDecoded = decodeBody(reqBuf.subarray(0, cap > 0 ? cap : reqBuf.length));
+    hooks.onRequest?.({ id, method, url: target, headers: fwdHeaders, ...reqDecoded });
+
+    let upstream: Dispatcher.ResponseData;
+    try {
+      upstream = await undiciRequest(target, {
+        method: method as Dispatcher.HttpMethod,
+        headers: fwdHeaders,
+        body: method === "GET" || method === "HEAD" ? undefined : reqBuf,
+        dispatcher,
+      });
+    } catch (e) {
+      hooks.log("warn", `relay: upstream failed ${target}: ${String(e)}`);
+      if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: `relay upstream failed: ${String(e)}` } }));
+      hooks.onResponse?.({ requestId: id, status: 502, statusText: "Bad Gateway", headers: {}, body: String(e) });
+      return;
+    }
+
+    const resHeaders = flattenUndici(upstream.headers as Record<string, string | string[] | undefined>);
+    res.writeHead(upstream.statusCode, filterResponseHeaders(resHeaders));
+
+    // Stream the body to the client while teeing a capped copy for the recorder.
+    const recChunks: Buffer[] = [];
+    let recTotal = 0;
+    upstream.body.on("data", (chunk: Buffer) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (cap <= 0 || recTotal < cap) {
+        const room = cap <= 0 ? buf.length : cap - recTotal;
+        recChunks.push(room < buf.length ? buf.subarray(0, room) : buf);
+        recTotal += buf.length;
+      }
+    });
+    upstream.body.on("end", () => {
+      const decoded = decodeBody(Buffer.concat(recChunks));
+      hooks.onResponse?.({
+        requestId: id,
+        status: upstream.statusCode,
+        statusText: "",
+        headers: resHeaders,
+        body: decoded.body,
+      });
+    });
+    upstream.body.on("error", (e) => {
+      hooks.log("warn", `relay: upstream stream error: ${String(e)}`);
+      if (!res.writableEnded) res.destroy();
+    });
+    upstream.body.pipe(res);
+  }
+
+  return new Promise<RelayHandle>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(opts.port, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : opts.port;
+      hooks.log(
+        "info",
+        `relay listening on http://127.0.0.1:${port} → ${opts.upstream}${opts.proxy ? ` (via ${opts.proxy})` : ""}`,
+      );
+      resolve({
+        port,
+        close: () =>
+          new Promise<void>((r) => {
+            server.close(() => r());
+          }),
+      });
+    });
+  });
+}

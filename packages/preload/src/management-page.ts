@@ -10,6 +10,7 @@
 import type { IpcRenderer } from "electron";
 import type { PluginManifest } from "@desktop-proxy/plugin-sdk";
 
+import { getRendererBus } from "./bus";
 import { ch } from "./channels";
 import type { SettingsOverlayHandle } from "./settings-overlay";
 
@@ -55,15 +56,17 @@ function esc(value: string): string {
 
 async function renderManagement(root: HTMLElement, ipc: IpcRenderer): Promise<void> {
   root.textContent = "Loading…";
+  const bus = getRendererBus();
 
   let info: AppInfo | null = null;
   let plugins: PluginListItem[] = [];
   let config: Record<string, unknown> = {};
   try {
     [info, plugins, config] = await Promise.all([
+      // app-info stays on IPC (in-app only; not part of the converged bus surface).
       ipc.invoke(ch("app-info")).catch(() => null),
-      ipc.invoke(ch("list-plugins")).catch(() => []),
-      ipc.invoke(ch("get-config")).catch(() => ({})),
+      bus.request<PluginListItem[]>("plugin.list").catch(() => []),
+      bus.request<Record<string, unknown>>("config.get").catch(() => ({})),
     ]);
   } catch {
     // fall through with defaults
@@ -132,21 +135,21 @@ async function renderManagement(root: HTMLElement, ipc: IpcRenderer): Promise<vo
 
   root.querySelector("#dpm-safe")?.addEventListener("change", (e) => {
     const checked = (e.target as HTMLInputElement).checked;
-    void ipc.invoke(ch("set-config"), { safeMode: checked }).then(() => flash(checked ? "Safe mode on" : "Safe mode off"));
+    void bus.request("config.set", { safeMode: checked }).then(() => flash(checked ? "Safe mode on" : "Safe mode off"));
   });
   root.querySelector("#dpm-log")?.addEventListener("change", (e) => {
     const value = (e.target as HTMLSelectElement).value;
-    void ipc.invoke(ch("set-config"), { logLevel: value }).then(() => flash(`Log level: ${value}`));
+    void bus.request("config.set", { logLevel: value }).then(() => flash(`Log level: ${value}`));
   });
   root.querySelector("#dpm-stealth")?.addEventListener("change", (e) => {
     const checked = (e.target as HTMLInputElement).checked;
-    void ipc.invoke(ch("set-config"), { stealth: checked }).then(() => flash("Stealth saved — restart to apply"));
+    void bus.request("config.set", { stealth: checked }).then(() => flash("Stealth saved — restart to apply"));
   });
   root.querySelectorAll<HTMLInputElement>("[data-plugin]").forEach((el) => {
     el.addEventListener("change", () => {
       const id = el.getAttribute("data-plugin");
       if (!id) return;
-      void ipc.invoke(ch("toggle-plugin"), id, el.checked).then(() => flash(`${id} ${el.checked ? "enabled" : "disabled"}`));
+      void bus.request("plugin.toggle", { id, enabled: el.checked }).then(() => flash(`${id} ${el.checked ? "enabled" : "disabled"}`));
     });
   });
 }

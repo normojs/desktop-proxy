@@ -5,19 +5,14 @@
  * AI service API tokens (OpenAI, Anthropic, Google, etc.).
  *
  * Logs intercepted data to the plugin's storage for later retrieval.
+ *
+ * NOTE: This file ships as plain JavaScript (loaded as CommonJS by the plugin
+ * host) — keep it free of TypeScript syntax.
  */
 
 // ── AI Service patterns ──────────────────────────────────────────────────────
 
-interface AIServicePattern {
-  name: string;
-  hostPattern: RegExp;
-  tokenHeader: string;
-  tokenPrefix: string;
-  bodyPaths: string[];
-}
-
-const AI_SERVICES: AIServicePattern[] = [
+const AI_SERVICES = [
   {
     name: "OpenAI",
     hostPattern: /api\.openai\.com/,
@@ -55,35 +50,14 @@ const AI_SERVICES: AIServicePattern[] = [
   },
 ];
 
-// ── Log entry types ──────────────────────────────────────────────────────────
-
-interface InterceptedRequest {
-  id: string;
-  service: string;
-  method: string;
-  url: string;
-  token: string | null;
-  body: unknown;
-  timestamp: number;
-}
-
-interface InterceptedResponse {
-  id: string;
-  requestId: string;
-  service: string;
-  status: number;
-  body: unknown;
-  timestamp: number;
-}
-
 // ── Redact token for safe logging ────────────────────────────────────────────
 
-function redactToken(token: string): string {
+function redactToken(token) {
   if (token.length <= 8) return "***";
   return token.slice(0, 4) + "..." + token.slice(-4);
 }
 
-function detectService(url: string): AIServicePattern | null {
+function detectService(url) {
   const lowerUrl = url.toLowerCase();
   for (const service of AI_SERVICES) {
     if (service.hostPattern.test(lowerUrl)) return service;
@@ -91,7 +65,7 @@ function detectService(url: string): AIServicePattern | null {
   return null;
 }
 
-function parseJSONSafe(text: string | null): unknown {
+function parseJSONSafe(text) {
   if (!text) return null;
   try {
     return JSON.parse(text);
@@ -105,12 +79,7 @@ function parseJSONSafe(text: string | null): unknown {
 const STORAGE_KEY = "desktop-proxy:intercepted";
 const MAX_ENTRIES = 1000;
 
-interface InterceptedStore {
-  requests: InterceptedRequest[];
-  responses: InterceptedResponse[];
-}
-
-function getStore(): InterceptedStore {
+function getStore() {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{"requests":[],"responses":[]}');
   } catch {
@@ -118,8 +87,7 @@ function getStore(): InterceptedStore {
   }
 }
 
-function saveStore(store: InterceptedStore): void {
-  // Trim old entries
+function saveStore(store) {
   if (store.requests.length > MAX_ENTRIES) {
     store.requests = store.requests.slice(-MAX_ENTRIES);
   }
@@ -129,13 +97,13 @@ function saveStore(store: InterceptedStore): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
 }
 
-function addRequest(req: InterceptedRequest): void {
+function addRequest(req) {
   const store = getStore();
   store.requests.push(req);
   saveStore(store);
 }
 
-function addResponse(resp: InterceptedResponse): void {
+function addResponse(resp) {
   const store = getStore();
   store.responses.push(resp);
   saveStore(store);
@@ -143,21 +111,12 @@ function addResponse(resp: InterceptedResponse): void {
 
 // ── Plugin Entry ─────────────────────────────────────────────────────────────
 
-interface PluginAPI {
-  log: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
-  network: {
-    onRequest(handler: (req: { id: string; method: string; url: string; headers: Record<string, string>; body: string | null; timestamp: number; _type: string }) => void): () => void;
-    onResponse(handler: (resp: { id: string; requestId: string; status: number; headers: Record<string, string>; body: string | null }) => void): () => void;
-  };
-  settings: { registerPage(page: { id: string; title: string; description: string; render(root: HTMLElement): void }): { unregister(): void } };
-}
-
 module.exports = {
-  start(api: PluginAPI) {
+  start(api) {
     api.log.info("Request Interceptor plugin started");
 
     // Track pending requests for matching responses
-    const pending = new Map<string, InterceptedRequest>();
+    const pending = new Map();
 
     // Intercept outgoing requests
     api.network.onRequest((req) => {
@@ -168,7 +127,7 @@ module.exports = {
         (k) => k.toLowerCase() === service.tokenHeader
       );
 
-      let token: string | null = null;
+      let token = null;
       if (tokenHeader) {
         const rawToken = req.headers[tokenHeader];
         token = rawToken.startsWith(service.tokenPrefix)
@@ -178,7 +137,7 @@ module.exports = {
 
       const body = parseJSONSafe(req.body);
 
-      const entry: InterceptedRequest = {
+      const entry = {
         id: req.id,
         service: service.name,
         method: req.method,
@@ -207,7 +166,7 @@ module.exports = {
 
       const body = parseJSONSafe(resp.body);
 
-      const entry: InterceptedResponse = {
+      const entry = {
         id: resp.id,
         requestId: resp.requestId,
         service: requestEntry.service,
@@ -228,49 +187,8 @@ module.exports = {
       id: "intercepted",
       title: "Intercepted Requests",
       description: "View captured API requests and responses from AI services.",
-      render(root: HTMLElement) {
-        const store = getStore();
-
-        root.innerHTML = `
-          <div style="font-family: system-ui, -apple-system, sans-serif; padding: 16px;">
-            <h3 style="margin: 0 0 8px; font-size: 16px; font-weight: 600;">Intercepted Requests</h3>
-            <p style="margin: 0 0 16px; color: #666; font-size: 13px;">
-              ${store.requests.length} requests, ${store.responses.length} responses captured.
-            </p>
-
-            <div style="display: flex; gap: 8px; margin-bottom: 16px;">
-              <button id="dp-refresh-intercepted" style="
-                padding: 6px 12px;
-                border: 1px solid #d0d5dd;
-                border-radius: 6px;
-                background: #fff;
-                cursor: pointer;
-                font-size: 13px;
-              ">Refresh</button>
-              <button id="dp-clear-intercepted" style="
-                padding: 6px 12px;
-                border: 1px solid #fecdca;
-                border-radius: 6px;
-                background: #fff;
-                color: #b42318;
-                cursor: pointer;
-                font-size: 13px;
-              ">Clear All</button>
-            </div>
-
-            <div id="dp-intercepted-list" style="display: flex; flex-direction: column; gap: 8px;">
-              ${renderEntries(store)}
-            </div>
-          </div>
-        `;
-
-        root.querySelector("#dp-refresh-intercepted")?.addEventListener("click", () => {
-          render(root);
-        });
-        root.querySelector("#dp-clear-intercepted")?.addEventListener("click", () => {
-          localStorage.setItem(STORAGE_KEY, '{"requests":[],"responses":[]}');
-          render(root);
-        });
+      render(root) {
+        renderInterceptedPage(root);
       },
     });
   },
@@ -282,7 +200,52 @@ module.exports = {
 
 // ── Rendering helpers ────────────────────────────────────────────────────────
 
-function renderEntries(store: InterceptedStore): string {
+function renderInterceptedPage(root) {
+  const store = getStore();
+
+  root.innerHTML = `
+    <div style="font-family: system-ui, -apple-system, sans-serif; padding: 16px;">
+      <h3 style="margin: 0 0 8px; font-size: 16px; font-weight: 600;">Intercepted Requests</h3>
+      <p style="margin: 0 0 16px; color: #666; font-size: 13px;">
+        ${store.requests.length} requests, ${store.responses.length} responses captured.
+      </p>
+
+      <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+        <button id="dp-refresh-intercepted" style="
+          padding: 6px 12px;
+          border: 1px solid #d0d5dd;
+          border-radius: 6px;
+          background: #fff;
+          cursor: pointer;
+          font-size: 13px;
+        ">Refresh</button>
+        <button id="dp-clear-intercepted" style="
+          padding: 6px 12px;
+          border: 1px solid #fecdca;
+          border-radius: 6px;
+          background: #fff;
+          color: #b42318;
+          cursor: pointer;
+          font-size: 13px;
+        ">Clear All</button>
+      </div>
+
+      <div id="dp-intercepted-list" style="display: flex; flex-direction: column; gap: 8px;">
+        ${renderEntries(store)}
+      </div>
+    </div>
+  `;
+
+  root.querySelector("#dp-refresh-intercepted")?.addEventListener("click", () => {
+    renderInterceptedPage(root);
+  });
+  root.querySelector("#dp-clear-intercepted")?.addEventListener("click", () => {
+    localStorage.setItem(STORAGE_KEY, '{"requests":[],"responses":[]}');
+    renderInterceptedPage(root);
+  });
+}
+
+function renderEntries(store) {
   const entries = [...store.requests].reverse().slice(0, 50);
   if (entries.length === 0) {
     return `<div style="color: #999; font-size: 13px; text-align: center; padding: 24px;">No intercepted requests yet. Interact with the AI service to capture.</div>`;
@@ -296,7 +259,7 @@ function renderEntries(store: InterceptedStore): string {
     .join("");
 }
 
-function renderEntry(req: InterceptedRequest, resp?: InterceptedResponse): string {
+function renderEntry(req, resp) {
   const statusColor = resp ? (resp.status < 400 ? "#039855" : "#b42318") : "#999";
   const statusText = resp ? `${resp.status}` : "pending";
 
@@ -336,7 +299,7 @@ function renderEntry(req: InterceptedRequest, resp?: InterceptedResponse): strin
   `;
 }
 
-function escapeHtml(text: string): string {
+function escapeHtml(text) {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

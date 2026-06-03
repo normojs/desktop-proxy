@@ -32,9 +32,9 @@ import type {
   NetworkRequestControl,
   NetworkResponseControl,
 } from "@desktop-proxy/plugin-sdk";
-import { isLevelEnabled, createCDP, createBusRouter, type BusRouter, type BusTransport } from "@desktop-proxy/plugin-sdk";
+import { isLevelEnabled, createCDP } from "@desktop-proxy/plugin-sdk";
 
-import { createRendererIpcTransport } from "./bus-ipc";
+import { getRendererBus, resetRendererBus } from "./bus";
 
 import type { IpcRenderer, IpcRendererEvent } from "electron";
 
@@ -55,30 +55,10 @@ function getIpcRenderer(): IpcRenderer {
   return _ipcRenderer!;
 }
 
-// ── Message bus (renderer leaf) ──────────────────────────────────────────────
-// A single leaf router over one IPC channel carries api.events (pub/sub) and RPC.
-// The transport (its ipcRenderer listener) is created once; on teardown we drop
-// the router (and repoint the transport to a no-op) so stale subs don't fire.
-let _busTransport: BusTransport | null = null;
-let _bus: BusRouter | null = null;
-
-function getBus(): BusRouter {
-  if (!_busTransport) _busTransport = createRendererIpcTransport(getIpcRenderer(), ch("bus"));
-  if (!_bus) {
-    _bus = createBusRouter();
-    _bus.addTransport("ipc", _busTransport);
-  }
-  return _bus;
-}
-
-function clearBus(): void {
-  _busTransport?.setReceiver(() => {});
-  _bus = null;
-}
-
+// api.events runs over the shared renderer bus (see ./bus).
 const eventsApi: PluginEvents = {
-  on: (topic, handler) => getBus().subscribe(topic, (data) => handler(data)),
-  emit: (topic, data) => getBus().publish(topic, data),
+  on: (topic, handler) => getRendererBus().subscribe(topic, (data) => handler(data)),
+  emit: (topic, data) => getRendererBus().publish(topic, data),
 };
 
 // ── Plugin State ─────────────────────────────────────────────────────────────
@@ -265,78 +245,65 @@ function createPluginAPI(manifest: PluginManifest): { api: PluginAPI; dispose: (
     },
   };
 
-  const network: PluginNetwork = allowPermission(manifest, "network")
-    ? {
-        onRequest: (handler) => remember(onRequest(handler)),
-        onResponse: (handler) => remember(onResponse(handler)),
-        // Renderer-scope interception: handlers run here; main pauses via CDP
-        // Fetch (requires config `cdpIntercept`) and routes the decision over IPC.
-        intercept: (handler, filter) => remember(addRequestInterceptor(handler, filter)),
-        interceptResponse: (handler, filter) => remember(addResponseInterceptor(handler, filter)),
-        transformStream: () => {
-          log.warn("api.network.transformStream is not yet available to renderer plugins; use a main-scope plugin");
-          return () => {};
-        },
-        onWebSocket: () => {
-          log.warn("api.network.onWebSocket is not yet available to renderer plugins; use a main-scope plugin");
-          return () => {};
-        },
-        transformWebSocket: () => {
-          log.warn("api.network.transformWebSocket is not yet available to renderer plugins; use a main-scope plugin");
-          return () => {};
-        },
-        raceRequest: () => {
-          log.warn("api.network.raceRequest is not yet available to renderer plugins; use a main-scope plugin");
-          return () => {};
-        },
-      }
-    : {
-        onRequest: () => {
-          throw new Error(`Plugin ${id} lacks the "network" permission`);
-        },
-        onResponse: () => {
-          throw new Error(`Plugin ${id} lacks the "network" permission`);
-        },
-        intercept: () => {
-          throw new Error(`Plugin ${id} lacks the "network" permission`);
-        },
-        interceptResponse: () => {
-          throw new Error(`Plugin ${id} lacks the "network" permission`);
-        },
-        transformStream: () => {
-          throw new Error(`Plugin ${id} lacks the "network" permission`);
-        },
-        onWebSocket: () => {
-          throw new Error(`Plugin ${id} lacks the "network" permission`);
-        },
-        transformWebSocket: () => {
-          throw new Error(`Plugin ${id} lacks the "network" permission`);
-        },
-        raceRequest: () => {
-          throw new Error(`Plugin ${id} lacks the "network" permission`);
-        },
-      };
+  // Permissions are checked lazily (on first actual use) rather than eagerly at
+  // API construction, so a plugin that never touches api.network / api.fs doesn't
+  // trigger a spurious "uses api.X without declaring …" warning at load time.
+  const requireNet = (): void => {
+    if (!allowPermission(manifest, "network")) {
+      throw new Error(`Plugin ${id} lacks the "network" permission`);
+    }
+  };
+  const network: PluginNetwork = {
+    onRequest: (handler) => {
+      requireNet();
+      return remember(onRequest(handler));
+    },
+    onResponse: (handler) => {
+      requireNet();
+      return remember(onResponse(handler));
+    },
+    // Renderer-scope interception: handlers run here; main pauses via CDP Fetch
+    // (requires config `cdpIntercept`) and routes the decision over IPC.
+    intercept: (handler, filter) => {
+      requireNet();
+      return remember(addRequestInterceptor(handler, filter));
+    },
+    interceptResponse: (handler, filter) => {
+      requireNet();
+      return remember(addResponseInterceptor(handler, filter));
+    },
+    transformStream: () => {
+      requireNet();
+      log.warn("api.network.transformStream is not yet available to renderer plugins; use a main-scope plugin");
+      return () => {};
+    },
+    onWebSocket: () => {
+      requireNet();
+      log.warn("api.network.onWebSocket is not yet available to renderer plugins; use a main-scope plugin");
+      return () => {};
+    },
+    transformWebSocket: () => {
+      requireNet();
+      log.warn("api.network.transformWebSocket is not yet available to renderer plugins; use a main-scope plugin");
+      return () => {};
+    },
+    raceRequest: () => {
+      requireNet();
+      log.warn("api.network.raceRequest is not yet available to renderer plugins; use a main-scope plugin");
+      return () => {};
+    },
+  };
 
   const denyFs = () => Promise.reject(new Error(`Plugin ${id} lacks the "fs" permission`));
-  const fsApi: PluginFS = allowPermission(manifest, "fs")
-    ? {
-        read: (p, encoding) => ipc.invoke(ch("fs:read"), id, p, encoding),
-        write: (p, data, encoding) => ipc.invoke(ch("fs:write"), id, p, data, encoding),
-        exists: (p) => ipc.invoke(ch("fs:exists"), id, p),
-        list: (p) => ipc.invoke(ch("fs:list"), id, p),
-        delete: (p) => ipc.invoke(ch("fs:delete"), id, p),
-        mkdir: (p) => ipc.invoke(ch("fs:mkdir"), id, p),
-        stat: (p) => ipc.invoke(ch("fs:stat"), id, p),
-      }
-    : {
-        read: denyFs,
-        write: denyFs,
-        exists: denyFs,
-        list: denyFs,
-        delete: denyFs,
-        mkdir: denyFs,
-        stat: denyFs,
-      };
+  const fsApi: PluginFS = {
+    read: (p, encoding) => (allowPermission(manifest, "fs") ? getRendererBus().request("fs.read", { id, path: p, encoding }) : denyFs()),
+    write: (p, data, encoding) => (allowPermission(manifest, "fs") ? getRendererBus().request("fs.write", { id, path: p, data, encoding }) : denyFs()),
+    exists: (p) => (allowPermission(manifest, "fs") ? getRendererBus().request("fs.exists", { id, path: p }) : denyFs()),
+    list: (p) => (allowPermission(manifest, "fs") ? getRendererBus().request("fs.list", { id, path: p }) : denyFs()),
+    delete: (p) => (allowPermission(manifest, "fs") ? getRendererBus().request("fs.delete", { id, path: p }) : denyFs()),
+    mkdir: (p) => (allowPermission(manifest, "fs") ? getRendererBus().request("fs.mkdir", { id, path: p }) : denyFs()),
+    stat: (p) => (allowPermission(manifest, "fs") ? getRendererBus().request("fs.stat", { id, path: p }) : denyFs()),
+  };
 
   const cdpCore = createRendererCDPCore(id, manifest, ipc);
   const cdp = createCDP({
@@ -655,5 +622,5 @@ export async function teardownPluginHost(): Promise<void> {
   clearNetworkHandlers();
   clearCdpHandlers();
   clearNetInterceptors();
-  clearBus();
+  resetRendererBus();
 }

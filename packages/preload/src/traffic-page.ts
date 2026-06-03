@@ -9,10 +9,9 @@
  * See docs/ui/network-inspector.html for the visual reference.
  */
 
-import type { IpcRenderer } from "electron";
 import type { PluginManifest } from "@desktop-proxy/plugin-sdk";
 
-import { ch } from "./channels";
+import { getRendererBus } from "./bus";
 import type { SettingsOverlayHandle } from "./settings-overlay";
 
 interface Summary {
@@ -77,13 +76,13 @@ const CAT: Record<string, { dot: string; fg: string; bg: string }> = {
 };
 const QUICK_CATS = ["ai", "auth", "telemetry", "api", "asset", "websocket"];
 
-export function registerTrafficPage(overlay: SettingsOverlayHandle, ipc: IpcRenderer): void {
+export function registerTrafficPage(overlay: SettingsOverlayHandle): void {
   overlay.registerPage(NETWORK_MANIFEST.id, NETWORK_MANIFEST, {
     id: "network",
     title: "Network",
     description: "Inspect captured traffic",
     render(root) {
-      void renderInspector(root, ipc);
+      void renderInspector(root);
     },
   });
 }
@@ -167,7 +166,8 @@ function hasToken(query: string, token: string): boolean {
 let followTimer: ReturnType<typeof setInterval> | null = null;
 const PRESETS_KEY = "dp-net-presets";
 
-async function renderInspector(root: HTMLElement, ipc: IpcRenderer): Promise<void> {
+async function renderInspector(root: HTMLElement): Promise<void> {
+  const bus = getRendererBus();
   if (followTimer) {
     clearInterval(followTimer);
     followTimer = null;
@@ -318,7 +318,7 @@ async function renderInspector(root: HTMLElement, ipc: IpcRenderer): Promise<voi
   async function loadList(): Promise<void> {
     let data: ListResult = { enabled: false, count: 0, entries: [] };
     try {
-      data = await ipc.invoke(ch("traffic:list"), state.query);
+      data = await bus.request("traffic.list", state.query);
     } catch {
       /* ignore */
     }
@@ -386,7 +386,7 @@ async function renderInspector(root: HTMLElement, ipc: IpcRenderer): Promise<voi
     });
     let d: Detail | null = null;
     try {
-      d = await ipc.invoke(ch("traffic:detail"), id);
+      d = await bus.request("traffic.detail", id);
     } catch {
       /* ignore */
     }
@@ -465,7 +465,7 @@ async function renderInspector(root: HTMLElement, ipc: IpcRenderer): Promise<voi
     (detailEl.querySelector("#dpi-curl") as HTMLElement).addEventListener("click", () => copyText(toCurl(d)));
     (detailEl.querySelector("#dpi-edit") as HTMLElement).addEventListener("click", () => renderEditor(d));
     (detailEl.querySelector("#dpi-replay") as HTMLElement).addEventListener("click", () => {
-      void ipc.invoke(ch("traffic:replay"), d.id).then((r: { ok: boolean; status?: number; error?: string }) => {
+      void bus.request<{ ok: boolean; status?: number; error?: string }>("traffic.replay", { id: d.id }).then((r) => {
         statsEl.textContent = r.ok ? `Replayed → ${r.status}` : `Replay failed: ${esc(r.error)}`;
         setTimeout(() => void loadList(), 500);
       });
@@ -496,9 +496,9 @@ async function renderInspector(root: HTMLElement, ipc: IpcRenderer): Promise<voi
       const url = (detailEl.querySelector("#dpe-url") as HTMLInputElement).value;
       const headers = parseHeaderLines((detailEl.querySelector("#dpe-headers") as HTMLTextAreaElement).value);
       const bodyVal = (detailEl.querySelector("#dpe-body") as HTMLTextAreaElement).value;
-      void ipc
-        .invoke(ch("traffic:replay"), d.id, { method, url, headers, body: bodyVal === "" ? undefined : bodyVal })
-        .then((r: { ok: boolean; status?: number; error?: string }) => {
+      void bus
+        .request<{ ok: boolean; status?: number; error?: string }>("traffic.replay", { id: d.id, overrides: { method, url, headers, body: bodyVal === "" ? undefined : bodyVal } })
+        .then((r) => {
           statsEl.textContent = r.ok ? `Resent → ${r.status}` : `Resend failed: ${esc(r.error)}`;
           setTimeout(() => void loadList(), 500);
         });
@@ -516,26 +516,26 @@ async function renderInspector(root: HTMLElement, ipc: IpcRenderer): Promise<voi
     }, 200);
   });
   capEl.addEventListener("change", () => {
-    void ipc.invoke(ch("set-config"), { captureTraffic: capEl.checked }).then(() => setTimeout(() => void loadList(), 300));
+    void bus.request("config.set", { captureTraffic: capEl.checked }).then(() => setTimeout(() => void loadList(), 300));
   });
   persistEl.addEventListener("change", () => {
-    void ipc.invoke(ch("set-config"), { persistTraffic: persistEl.checked });
+    void bus.request("config.set", { persistTraffic: persistEl.checked });
   });
-  void ipc
-    .invoke(ch("get-config"))
-    .then((cfg: { persistTraffic?: boolean }) => {
+  void bus
+    .request<{ persistTraffic?: boolean }>("config.get")
+    .then((cfg) => {
       persistEl.checked = cfg?.persistTraffic === true;
     })
     .catch(() => {});
   (root.querySelector("#dpi-clear") as HTMLElement).addEventListener("click", () => {
-    void ipc.invoke(ch("traffic:clear")).then(() => {
+    void bus.request("traffic.clear").then(() => {
       state.selected = null;
       detailEl.style.display = "none";
       void loadList();
     });
   });
   (root.querySelector("#dpi-har") as HTMLElement).addEventListener("click", () => {
-    void ipc.invoke(ch("traffic:export"), state.query).then((r: { path: string; count: number }) => {
+    void bus.request<{ path: string; count: number }>("traffic.export", state.query).then((r) => {
       statsEl.textContent = `Exported ${r.count} entries → ${r.path}`;
     });
   });

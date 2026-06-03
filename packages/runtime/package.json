@@ -14,7 +14,8 @@
     "@desktop-proxy/plugin-sdk": "workspace:*",
     "nats": "^2.29.3",
     "nats-jwt": "^0.0.9",
-    "nkeys.js": "^1.1.0"
+    "nkeys.js": "^1.1.0",
+    "undici": "^8.3.0"
   },
   "devDependencies": {
     "@types/node": "^22",

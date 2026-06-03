@@ -123,7 +123,7 @@ export interface PluginEvents {
 // ── Network Interception (primary use case) ──────────────────────────────────
 
 /** Where an intercepted request/response was observed. */
-export type NetworkSource = "renderer-cdp" | "node-http" | "web-request" | "renderer-hook";
+export type NetworkSource = "renderer-cdp" | "node-http" | "web-request" | "renderer-hook" | "relay";
 
 export interface NetworkRequest {
   id: string;

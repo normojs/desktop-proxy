@@ -29,6 +29,7 @@ import { isBackendName, type BackendName } from "./backends/index.js";
 import { proxy, type ProxySubcommand } from "./commands/proxy.js";
 import { permissions } from "./commands/permissions.js";
 import { pair } from "./commands/pair.js";
+import { relay, type RelaySubcommand } from "./commands/relay.js";
 
 function printHelp(): void {
   console.log(`
@@ -57,6 +58,7 @@ Usage:
   desktop-proxy proxy <on|off|status> Configure a renderer/ext-host proxy for VS Code forks (no injection)
   desktop-proxy permissions [--open <id>] Re-grant OS permissions after install (macOS TCC; opens Settings)
   desktop-proxy pair [--name <label>] Show a QR/link to pair a phone with the remote bus (NATS; see docs/nats-deploy.md)
+  desktop-proxy relay <on|off|status> Local model-traffic relay: capture + forward an IDE core's model calls (--codex wires ~/.codex/config.toml)
 
 Options:
   --app <path>      Path to the .app bundle (auto-detected if omitted)
@@ -70,6 +72,11 @@ Options:
   --bypass <list>          Proxy bypass list (proxy on)
   --ca <path>              CA cert path to print NODE_EXTRA_CA_CERTS hint (proxy on)
   --strict-ssl             Keep TLS verification on (proxy on; default off)
+  --upstream <url>         Relay upstream base URL (relay on)
+  --key <token>            Relay bearer token to inject if absent (relay on)
+  --port <n>               Relay local port (relay on; default 8788)
+  --proxy <url>            Relay outbound proxy, e.g. http://127.0.0.1:7897 (relay on)
+  --codex                  Also wire ~/.codex/config.toml (relay on/off)
   --id/--name/--scope <v>  create-plugin manifest fields
   --json            Machine-readable output (doctor, plugin/config/validate)
   --quiet           Suppress progress output
@@ -119,6 +126,16 @@ async function main(): Promise<void> {
       opts.bypass = args[++i];
     } else if (a === "--ca" && args[i + 1]) {
       opts.ca = args[++i];
+    } else if (a === "--upstream" && args[i + 1]) {
+      opts.upstream = args[++i];
+    } else if (a === "--key" && args[i + 1]) {
+      opts.key = args[++i];
+    } else if (a === "--port" && args[i + 1]) {
+      opts.port = Number(args[++i]);
+    } else if (a === "--proxy" && args[i + 1]) {
+      opts.proxy = args[++i];
+    } else if (a === "--codex") {
+      opts.codex = true;
     } else if (a === "--strict-ssl") {
       opts.strictSSL = true;
     } else if (a === "--open" && args[i + 1]) {
@@ -198,6 +215,23 @@ async function main(): Promise<void> {
     case "pair":
       await pair({ name: opts.name as string | undefined });
       break;
+
+    case "relay": {
+      const sub = (positionals[1] as RelaySubcommand | undefined) ?? "status";
+      if (sub !== "on" && sub !== "off" && sub !== "status") {
+        console.error(`Unknown relay subcommand "${sub}". Use: on | off | status.`);
+        process.exit(1);
+      }
+      relay(sub, {
+        upstream: opts.upstream as string | undefined,
+        key: opts.key as string | undefined,
+        port: opts.port as number | undefined,
+        proxy: opts.proxy as string | undefined,
+        codex: opts.codex as boolean | undefined,
+        json,
+      });
+      break;
+    }
 
     case "proxy": {
       const sub = (positionals[1] as ProxySubcommand | undefined) ?? "status";

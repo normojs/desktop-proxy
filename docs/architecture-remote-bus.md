@@ -30,7 +30,11 @@
   - A2. ✅ `IpcTransport`(主 `runtime/bus-ipc.ts` 多对等 hub / 渲染 `preload/bus-ipc.ts` 叶子),单通道 `ch("bus")` 承载信封。
   - A3. ✅ `api.events` 迁到 bus(主 hub `bridge:true`,渲染叶子;行为不变)。
   - A4. ✅ 手机相关面收敛为 bus RPC:`config.get/set`、`plugin.list/toggle`、`traffic.list/detail/clear`(逻辑单点在 `bus.handle`,旧 IPC 通道**委托**到 bus;远程客户端可直接调)。
-  - A5. ⏳(可延后)其余通道迁入:`traffic.replay/export`、fs/cdp/net/storage;以及渲染端逐步改用 `bus.request`。
+  - A5. ✅ 协议清理:
+    - A5.1 `traffic.replay/export` 收敛到 `bus.handle`,旧 IPC 通道委托到 bus。
+    - A5.2 主 hub **远程 ACL**:`canReceive` 仅对 `source==="nats"` 生效,放行白名单方法(`config.get/set`、`plugin.list/toggle`、`traffic.list/detail/replay/clear/export`);被拒的 RPC **快速回 `forbidden`**(不再等超时)。
+    - A5.3 渲染端共享总线 `preload/bus.ts`(单 `BusRouter` 叶子);`traffic-page`/`management-page` 改用 `bus.request`,`api.fs` 经 `fs.*` RPC 走 bus(`api.events` 已在 A3 迁移)。
+    - A5.4 **边界(刻意不入 bus)**:`cdp:*`(按 `webContents` 事件流,且高危,绝不暴露给远程)、`app-info`、窗口控制等**仅限应用内**通道继续走直连 IPC;`fs.*` 虽走 bus 但**不在远程白名单**,手机/CLI 无法触达磁盘。
   - A6 → 并入 B:独立进程(CLI/手机)用不了 Electron IPC,需网络传输(NATS),故 Node 客户端库随 B 一起做。
 - **B 远程打通(代码完成,联调需你的 NATS 服务器)**
   - B1. ✅ `net/nats-transport.ts`:`createNatsHubTransport`(桌面)+ `createNatsClientTransport`(手机/CLI);`net/remote-subjects.ts` 主题/配对/ACL(纯逻辑,10 单测,hub 映射用 mock 连接测)。

@@ -10,6 +10,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join, dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -37,6 +38,31 @@ export interface InstallOptions {
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * When the install runs under `sudo` (needed on macOS to modify an app bundle in
+ * /Applications), `homedir()` resolves to root's home. But the user dir must be
+ * the *invoking* user's `~/.desktop-proxy` — it's baked into the asar loader and
+ * the runtime (running later as that user) reads/writes it. Resolve from
+ * `SUDO_USER`/`SUDO_UID`/`SUDO_GID` so a sudo install lands in the right place
+ * and stays writable by the user.
+ */
+function invokingUser(): { home: string; uid: number; gid: number } | null {
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  const su = process.env.SUDO_USER;
+  if (!isRoot || !su || su === "root") return null;
+  let home = process.platform === "darwin" ? `/Users/${su}` : `/home/${su}`;
+  try {
+    const out = execFileSync("sh", ["-c", `echo ~${su}`], { encoding: "utf8" }).trim();
+    if (out && !out.startsWith("~")) home = out;
+  } catch {
+    /* fall back to the platform default above */
+  }
+  const uid = Number(process.env.SUDO_UID);
+  const gid = Number(process.env.SUDO_GID);
+  if (!Number.isFinite(uid) || !Number.isFinite(gid)) return null;
+  return { home, uid, gid };
+}
+
 export async function install(opts: InstallOptions = {}): Promise<void> {
   const log = opts.quiet ? () => {} : (msg: string) => console.log(`  ${msg}`);
 
@@ -52,8 +78,9 @@ export async function install(opts: InstallOptions = {}): Promise<void> {
     throw new Error(`backend "${backend.name}" cannot be used here: ${support.reason}`);
   }
 
-  // Resolve user paths
-  const userRoot = join(homedir(), ".desktop-proxy");
+  // Resolve user paths (honor SUDO_USER so a sudo install targets the user's home).
+  const sudoer = invokingUser();
+  const userRoot = join(sudoer?.home ?? homedir(), ".desktop-proxy");
   const runtimeDir = join(userRoot, "runtime");
   const pluginsDir = join(userRoot, "plugins");
   const backupDir = join(userRoot, "backup");
@@ -106,15 +133,20 @@ export async function install(opts: InstallOptions = {}): Promise<void> {
   let resigned = false;
   if (opts.noResign !== true && codex.platform === "darwin") {
     clearQuarantine(codex.appRoot);
+    // Under sudo the invoking user's login keychain isn't reachable (root's is
+    // used), so creating/using a local signing identity is unreliable. Sign
+    // ad-hoc in that case — the app still launches locally; TCC perms reset on
+    // each re-sign (re-grant once via `dprox permissions`).
+    const useLocalIdentity = !sudoer;
     if (result.entitlements.length > 0) {
       const entitlementsPath = join(userRoot, "inject.entitlements");
       writeFileSync(entitlementsPath, buildEntitlementsPlist(result.entitlements));
-      signAppBundleWithEntitlements(codex.appRoot, entitlementsPath, { identityName: DEFAULT_SIGNING_IDENTITY });
+      signAppBundleWithEntitlements(codex.appRoot, entitlementsPath, { identityName: DEFAULT_SIGNING_IDENTITY, useLocalIdentity });
     } else {
-      signAppBundle(codex.appRoot, { identityName: DEFAULT_SIGNING_IDENTITY });
+      signAppBundle(codex.appRoot, { identityName: DEFAULT_SIGNING_IDENTITY, useLocalIdentity });
     }
     resigned = true;
-    log("Re-signed app bundle with local identity");
+    log(useLocalIdentity ? "Re-signed app bundle with local identity" : "Re-signed app bundle (ad-hoc)");
   }
 
   // ── Deploy default request-interceptor plugin (shared) ────────────────────
@@ -141,17 +173,34 @@ export async function install(opts: InstallOptions = {}): Promise<void> {
     ),
   );
 
+  // A sudo install created everything as root; hand the user dir back to the
+  // invoking user so the runtime (running as that user) can write logs/config/
+  // storage/traffic and the asar loader can read runtime/main.js.
+  if (sudoer) {
+    try {
+      execFileSync("chown", ["-R", `${sudoer.uid}:${sudoer.gid}`, userRoot]);
+      log("Ownership of user dir restored to invoking user");
+    } catch (e) {
+      console.warn(`  Warning: could not chown ${userRoot} to the user — runtime may fail to write. ${String(e)}`);
+    }
+  }
+
   console.log(`\n  ✓ desktop-proxy installed.`);
   console.log(`  Plugins:  ${pluginsDir}`);
   console.log(`  Logs:     ${logDir}`);
   console.log(`\n  Launch the app normally; plugins will load automatically.`);
   console.log();
 
-  // Re-signing reset the app's macOS TCC permissions; guide a one-time re-grant
-  // and open System Settings. (No-op on Windows/Linux, which don't reset perms.)
+  // Re-signing reset the app's macOS TCC permissions; guide a one-time re-grant.
+  // (No-op on Windows/Linux, which don't reset perms.) Under sudo we can't open
+  // the user's System Settings session as root, so just print the hint instead.
   if (resigned && codex.platform === "darwin") {
     console.log(`  Re-signing reset macOS permissions for this app (one-time). Re-grant:`);
-    permissions({ openRoot: true });
+    if (sudoer) {
+      console.log(`  Run as your user (not sudo):  dprox permissions\n`);
+    } else {
+      permissions({ openRoot: true });
+    }
   }
 }
 

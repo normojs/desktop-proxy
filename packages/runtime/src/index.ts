@@ -70,10 +70,31 @@ const pluginStorage = createPluginStorage(userRoot);
 // the hub (bridge: true); renderer routers are leaves.
 let _bus: BusRouter | null = null;
 
+// Methods a REMOTE client (phone/CLI over NATS) may invoke. In-app (IPC) callers
+// have full access; remote is limited to inspector + control, never fs/cdp/etc.
+const REMOTE_METHODS = new Set([
+  "config.get",
+  "config.set",
+  "plugin.list",
+  "plugin.toggle",
+  "traffic.list",
+  "traffic.detail",
+  "traffic.replay",
+  "traffic.clear",
+  "traffic.export",
+]);
+
 function getBus(): BusRouter {
   if (!_bus) {
     const electron = getElectron();
-    _bus = createBusRouter({ bridge: true });
+    _bus = createBusRouter({
+      bridge: true,
+      canReceive: (env, source) => {
+        if (source !== "nats") return true; // in-app IPC: full access
+        if (env.kind === "req") return REMOTE_METHODS.has(env.method); // remote: allowlist only
+        return true; // events/responses pass
+      },
+    });
     _bus.addTransport("ipc", createMainIpcTransport(electron, ch("bus"), log));
   }
   return _bus;
@@ -188,6 +209,24 @@ interface Config {
   captureTraffic?: boolean;
   /** Also append finalized traffic to disk (log/traffic.ndjson) for post-mortem. */
   persistTraffic?: boolean;
+  /**
+   * Local model-traffic relay. Point an out-of-process model client (e.g. Codex's
+   * core via ~/.codex/config.toml base_url) at http://127.0.0.1:<port> so its
+   * requests are captured (inspector + bus) and forwarded upstream. See
+   * `dprox relay`. The only way to observe model traffic that lives outside the
+   * Electron processes (Codex Rust core, Windsurf language server).
+   */
+  relay?: {
+    enabled?: boolean;
+    /** Local port to listen on (default 8788). */
+    port?: number;
+    /** Upstream base URL, e.g. https://api.openai.com/v1 or http://127.0.0.1:57321/v1. */
+    upstream?: string;
+    /** Optional outbound proxy for the forward (e.g. http://127.0.0.1:7897). */
+    proxy?: string;
+    /** Inject Authorization: Bearer <key> when the client didn't send one. */
+    apiKey?: string;
+  };
   /** Stable id for this install, used in NATS subjects (auto-generated). */
   instanceId?: string;
   /** Remote bus over NATS (for CLI/phone). See docs/architecture-remote-bus.md. */
@@ -431,6 +470,70 @@ function syncTrafficCapture(): void {
     }
   } catch (e) {
     log("warn", "traffic capture sync failed:", String(e));
+  }
+}
+
+// Local model-traffic relay (config-gated). Starts/stops to match config.relay,
+// feeding captured req/resp into the same network hub the recorder + plugins use
+// (tagged source "relay"), so out-of-process model traffic shows up everywhere.
+let _relay: import("./net/relay").RelayHandle | null = null;
+let _relayKey = ""; // signature of the applied config, to avoid needless restarts
+
+async function syncRelay(): Promise<void> {
+  try {
+    const cfg = readConfig();
+    const r = cfg.relay;
+    const want = r?.enabled === true && typeof r.upstream === "string" && r.upstream.length > 0;
+    const key = want ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0 }) : "";
+    if (key === _relayKey) return; // unchanged
+
+    if (_relay) {
+      await _relay.close().catch(() => undefined);
+      _relay = null;
+    }
+    _relayKey = key;
+    if (!want) return;
+
+    const { startRelay } = await import("./net/relay.js");
+    const net = getMainNetwork();
+    _relay = await startRelay(
+      {
+        port: r!.port ?? 8788,
+        upstream: r!.upstream!,
+        proxy: r!.proxy,
+        apiKey: r!.apiKey,
+        maxBodyBytes: readConfig().maxResponseBodyBytes ?? 1024 * 1024,
+      },
+      {
+        log,
+        onRequest: (req) =>
+          net.observeRequest({
+            id: req.id,
+            source: "relay",
+            _type: "node",
+            method: req.method,
+            url: req.url,
+            headers: req.headers,
+            body: req.body,
+            bodyEncoding: req.bodyEncoding,
+            timestamp: Date.now(),
+          }),
+        onResponse: (resp) =>
+          net.observeResponse({
+            id: `resp-${resp.requestId}`,
+            requestId: resp.requestId,
+            source: "relay",
+            status: resp.status,
+            statusText: resp.statusText,
+            headers: resp.headers,
+            body: resp.body,
+            timestamp: Date.now(),
+          }),
+      },
+    );
+  } catch (e) {
+    log("warn", "relay sync failed:", String(e));
+    _relayKey = ""; // allow a retry on the next config change
   }
 }
 
@@ -759,41 +862,11 @@ function setupIPCBridge(): void {
   electron.ipcMain.handle(ch("traffic:detail"), async (_e, id: string) => getBus().request("traffic.detail", id));
   electron.ipcMain.handle(
     ch("traffic:replay"),
-    async (_e, id: string, overrides?: { url?: string; method?: string; headers?: Record<string, string>; body?: string }) => {
-      if (typeof fetch !== "function") return { ok: false, error: "fetch is unavailable in this runtime" };
-      const d = getTrafficRecorder().detail(id);
-      if (!d) return { ok: false, error: "request not found" };
-      const url = overrides?.url ?? d.url;
-      const method = (overrides?.method ?? d.method ?? "GET").toUpperCase();
-      // When the editor supplies headers, use them verbatim (so a removed header
-      // is actually dropped); otherwise replay the recorded request headers.
-      const base = overrides?.headers ?? d.reqHeaders;
-      const headers: Record<string, string> = {};
-      for (const [k, v] of Object.entries(base)) {
-        if (!/^(host|content-length|connection|accept-encoding)$/i.test(k)) headers[k] = v;
-      }
-      const body = overrides?.body ?? (method === "GET" || method === "HEAD" ? undefined : d.reqBody ?? undefined);
-      try {
-        const res = await fetch(url, { method, headers, body });
-        log("info", `traffic: replayed ${method} ${url} → ${res.status}`);
-        return { ok: true, status: res.status };
-      } catch (e) {
-        return { ok: false, error: String(e) };
-      }
-    },
+    async (_e, id: string, overrides?: { url?: string; method?: string; headers?: Record<string, string>; body?: string }) =>
+      getBus().request("traffic.replay", { id, overrides }),
   );
-  electron.ipcMain.handle(ch("traffic:clear"), async () => {
-    await getBus().request("traffic.clear");
-    return { ok: true };
-  });
-  electron.ipcMain.handle(ch("traffic:export"), async (_e, query?: string) => {
-    const har = getTrafficRecorder().toHar(query);
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const outPath = path.join(userRoot, `traffic-${stamp}.har`);
-    fs.writeFileSync(outPath, JSON.stringify(har, null, 2));
-    log("info", `traffic: exported HAR to ${outPath}`);
-    return { path: outPath, count: har.log.entries.length };
-  });
+  electron.ipcMain.handle(ch("traffic:clear"), async () => getBus().request("traffic.clear"));
+  electron.ipcMain.handle(ch("traffic:export"), async (_e, query?: string) => getBus().request("traffic.export", query));
 
   // App info
   electron.ipcMain.handle(ch("app-info"), async () => ({
@@ -926,33 +999,57 @@ function setupIPCBridge(): void {
     getTrafficRecorder().clear();
     return { ok: true };
   });
+  bus.handle("traffic.replay", async (p) => {
+    const { id, overrides } = (p as { id: string; overrides?: { url?: string; method?: string; headers?: Record<string, string>; body?: string } }) ?? {};
+    if (typeof fetch !== "function") return { ok: false, error: "fetch is unavailable in this runtime" };
+    const d = getTrafficRecorder().detail(id);
+    if (!d) return { ok: false, error: "request not found" };
+    const url = overrides?.url ?? d.url;
+    const method = (overrides?.method ?? d.method ?? "GET").toUpperCase();
+    const base = overrides?.headers ?? d.reqHeaders;
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(base)) {
+      if (!/^(host|content-length|connection|accept-encoding)$/i.test(k)) headers[k] = v;
+    }
+    const body = overrides?.body ?? (method === "GET" || method === "HEAD" ? undefined : d.reqBody ?? undefined);
+    try {
+      const res = await fetch(url, { method, headers, body });
+      log("info", `traffic: replayed ${method} ${url} → ${res.status}`);
+      return { ok: true, status: res.status };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+  bus.handle("traffic.export", (p) => {
+    const har = getTrafficRecorder().toHar(p as string | undefined);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const outPath = path.join(userRoot, `traffic-${stamp}.har`);
+    fs.writeFileSync(outPath, JSON.stringify(har, null, 2));
+    log("info", `traffic: exported HAR to ${outPath}`);
+    return { path: outPath, count: har.log.entries.length };
+  });
 
-  // Sandboxed filesystem — renderer plugins reach disk through these handlers.
-  // The plugin id scopes each call to its own confined data directory.
+  // Sandboxed filesystem — the plugin id scopes each call to its confined data
+  // dir. Converged onto the bus (in-app only: NOT in REMOTE_METHODS, so a remote
+  // phone/CLI cannot reach the desktop filesystem).
   type FileEncoding = import("@desktop-proxy/plugin-sdk").FileEncoding;
   const fsRoot = (id: string) => pluginDataDir(userRoot, id);
-
-  electron.ipcMain.handle(ch("fs:read"), async (_e, id: string, p: string, encoding?: FileEncoding) =>
-    fsRead(fsRoot(id), p, encoding),
-  );
-  electron.ipcMain.handle(ch("fs:write"), async (_e, id: string, p: string, data: string, encoding?: FileEncoding) =>
-    fsWrite(fsRoot(id), p, data, encoding),
-  );
-  electron.ipcMain.handle(ch("fs:exists"), async (_e, id: string, p: string) =>
-    fsExists(fsRoot(id), p),
-  );
-  electron.ipcMain.handle(ch("fs:list"), async (_e, id: string, p?: string) =>
-    fsList(fsRoot(id), p),
-  );
-  electron.ipcMain.handle(ch("fs:delete"), async (_e, id: string, p: string) =>
-    fsDelete(fsRoot(id), p),
-  );
-  electron.ipcMain.handle(ch("fs:mkdir"), async (_e, id: string, p: string) =>
-    fsMkdir(fsRoot(id), p),
-  );
-  electron.ipcMain.handle(ch("fs:stat"), async (_e, id: string, p: string) =>
-    fsStat(fsRoot(id), p),
-  );
+  const fsArgs = (p: unknown) => (p ?? {}) as { id: string; path: string; data?: string; encoding?: FileEncoding };
+  bus.handle("fs.read", (p) => { const a = fsArgs(p); return fsRead(fsRoot(a.id), a.path, a.encoding); });
+  bus.handle("fs.write", (p) => { const a = fsArgs(p); return fsWrite(fsRoot(a.id), a.path, a.data ?? "", a.encoding); });
+  bus.handle("fs.exists", (p) => { const a = fsArgs(p); return fsExists(fsRoot(a.id), a.path); });
+  bus.handle("fs.list", (p) => { const a = fsArgs(p); return fsList(fsRoot(a.id), a.path); });
+  bus.handle("fs.delete", (p) => { const a = fsArgs(p); return fsDelete(fsRoot(a.id), a.path); });
+  bus.handle("fs.mkdir", (p) => { const a = fsArgs(p); return fsMkdir(fsRoot(a.id), a.path); });
+  bus.handle("fs.stat", (p) => { const a = fsArgs(p); return fsStat(fsRoot(a.id), a.path); });
+  // Legacy IPC channels delegate to the bus (kept for any direct ipc callers).
+  electron.ipcMain.handle(ch("fs:read"), async (_e, id: string, p: string, encoding?: FileEncoding) => getBus().request("fs.read", { id, path: p, encoding }));
+  electron.ipcMain.handle(ch("fs:write"), async (_e, id: string, p: string, data: string, encoding?: FileEncoding) => getBus().request("fs.write", { id, path: p, data, encoding }));
+  electron.ipcMain.handle(ch("fs:exists"), async (_e, id: string, p: string) => getBus().request("fs.exists", { id, path: p }));
+  electron.ipcMain.handle(ch("fs:list"), async (_e, id: string, p?: string) => getBus().request("fs.list", { id, path: p }));
+  electron.ipcMain.handle(ch("fs:delete"), async (_e, id: string, p: string) => getBus().request("fs.delete", { id, path: p }));
+  electron.ipcMain.handle(ch("fs:mkdir"), async (_e, id: string, p: string) => getBus().request("fs.mkdir", { id, path: p }));
+  electron.ipcMain.handle(ch("fs:stat"), async (_e, id: string, p: string) => getBus().request("fs.stat", { id, path: p }));
 
   // Chrome DevTools Protocol — attached to the calling renderer's webContents.
   // Permission gating happens preload-side; events flow back via ch("cdp:event").
@@ -1035,6 +1132,8 @@ function startConfigWatcher(): void {
 
         // Start/stop the traffic recorder to match captureTraffic.
         syncTrafficCapture();
+        // Start/stop the model-traffic relay to match config.relay.
+        void syncRelay();
         // Connect/disconnect the remote (NATS) bus to match config.
         void syncRemote();
 
@@ -1127,6 +1226,9 @@ if (!isSafeModeEnabled()) {
 
 // Begin recording traffic if captureTraffic is already enabled.
 syncTrafficCapture();
+
+// Start the model-traffic relay if it's already enabled in config.
+void syncRelay();
 
 // Connect the remote (NATS) bus if it's already enabled in config.
 void syncRemote();

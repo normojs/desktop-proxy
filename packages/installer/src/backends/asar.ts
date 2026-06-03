@@ -94,9 +94,17 @@ export class AsarBackend implements InjectionBackend {
     log(`Patched app.asar (entry was ${originalMain})`);
 
     // ── Update ElectronAsarIntegrity ───────────────────────────────────────
+    // Best-effort: the fuse flip below (EnableEmbeddedAsarIntegrityValidation→off)
+    // is what actually disables validation, so a plist quirk here must not abort
+    // the install (which would leave a patched-but-unsigned bundle).
     if (install.metaPath) {
-      writeIntegrity(install, patchedHash);
-      log(`Updated ElectronAsarIntegrity → ${patchedHash.slice(0, 12)}...`);
+      try {
+        writeIntegrity(install, patchedHash);
+        log(`Updated ElectronAsarIntegrity → ${patchedHash.slice(0, 12)}...`);
+      } catch (e) {
+        console.warn(`  Warning: ${String(e)}`);
+        console.warn(`  Continuing — the integrity fuse (off) disables validation.`);
+      }
     }
 
     // ── Flip the integrity fuse ────────────────────────────────────────────

@@ -128,7 +128,19 @@ export function createBusRouter(options: BusRouterOptions = {}): BusRouter {
   }
 
   function onMessage(env: Envelope, source: string): void {
-    if (canReceive && source !== "local" && !canReceive(env, source)) return;
+    if (canReceive && source !== "local" && !canReceive(env, source)) {
+      // Deny fast: a blocked RPC gets a "forbidden" reply so the caller fails
+      // immediately instead of waiting for its request to time out.
+      if (env.kind === "req") {
+        const t = transports.get(source);
+        try {
+          t?.send({ kind: "res", id: env.id, ok: false, error: "forbidden" }, env.src);
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
 
     if (env.kind === "event") {
       deliverEvent(env.topic, env.data, source);

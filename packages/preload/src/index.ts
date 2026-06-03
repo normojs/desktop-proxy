@@ -119,7 +119,7 @@ function boot(): void {
       overlay = installSettingsOverlay({ stealth });
       setSettingsCallbacks(overlay.registerSection, overlay.registerPage);
       registerManagementPage(overlay, getIpcRenderer());
-      registerTrafficPage(overlay, getIpcRenderer());
+      registerTrafficPage(overlay);
       fileLog("settings overlay installed");
     }
   } catch (e) {
@@ -158,7 +158,7 @@ getIpcRenderer().on(ch("plugins-changed"), () => {
       // Re-add the framework pages that clearAll() removed alongside plugin pages.
       if (overlay) {
         registerManagementPage(overlay, getIpcRenderer());
-        registerTrafficPage(overlay, getIpcRenderer());
+        registerTrafficPage(overlay);
       }
       await startPluginHost();
       fileLog("hot-reload complete");
