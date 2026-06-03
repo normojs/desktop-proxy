@@ -101,10 +101,16 @@ backends) only speak Chat Completions. The dedicated adapter:
   `output_text` / `function_call_arguments` / `reasoning_summary_*` / `completed` + usage),
   mirroring CodexPlusPlus's `protocol_proxy` event schema.
 
-**Covered (Phase 1+2a):** text, function tool-calls, usage/cost, reasoner
-`reasoning_content` summaries.
-**Deferred:** `apply_patch` / custom freeform-tool encoding and inline `<think>`
-detection (editing already works via the standard `exec_command` tool).
+**Covered:** text; function tool-calls **including parallel calls** (grouped into a
+single assistant turn so chat/completions accepts them); usage/cost; reasoner
+reasoning summaries; and **multi-turn `reasoning_content` round-trip** (carried from
+the Responses `reasoning` item onto the assistant message, which thinking models
+require). Verified driving Codex's full coding agent (multi-file projects — a game,
+a browser terminal emulator) against DeepSeek with **zero protocol errors**.
+
+**Deferred:** `apply_patch` custom freeform-tool encoding and inline `<think>`
+detection — not needed in practice, since Codex edits via the standard
+`exec_command` tool.
 
 ## Limitations
 
