@@ -1,0 +1,17 @@
+{
+  "name": "@desktop-proxy/remote-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable pure logic for the phone app (uni-app x): NATS protocol, bus client, nkey decode, chat reconstruction. Vendored into the app as .uts.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^6.0"
+  }
+}
