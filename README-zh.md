@@ -19,6 +19,7 @@
 ## 目录
 
 - [工作原理](#工作原理)
+- [模型中转（在任意 IDE 用任意模型）](#模型中转)
 - [仓库结构](#仓库结构)
 - [环境要求](#环境要求)
 - [从源码构建](#从源码构建)
@@ -69,6 +70,39 @@
 
 由于渲染进程运行在沙盒中，插件源码会通过 IPC 从主进程获取，并在 preload 上下文里用
 `new Function(...)` 执行。
+
+---
+
+## 模型中转
+
+一个本地代理：让 AI IDE 的模型客户端指向它，从而**观测、重定向、改写、回退、翻译、管控**
+模型流量——包括那些模型客户端运行在 Electron 进程**之外**的 IDE（如 Codex 的原生 Rust
+核心），这类流量单靠注入无法触达。完整文档见 **[docs/model-relay.md](docs/model-relay.md)**。
+
+**无需注入即可使用**（Codex 最简路径）：
+
+```bash
+# 把 Codex 指向中转 → 任意 OpenAI 兼容后端、免登录、修正模型名
+dprox relay on --codex --upstream https://api.deepseek.com/v1 --key sk-<KEY> \
+  --upstream-api chat --map "gpt-*=deepseek-v4-flash"
+dprox relay daemon            # 或：dprox relay service install （开机自启）
+dprox relay doctor            # 一键体检整套设置
+open /Applications/Codex.app  # 无需 ChatGPT 登录；流量经过中转
+```
+
+能力一览（均通过 `config.relay` 配置，实时生效）：
+
+| 维度 | 内容 |
+|---|---|
+| **运行方式** | 独立守护进程 · 后台服务（launchd/systemd/任务计划） · 注入应用内 |
+| **路由** | 模型改写（`--map`）、条件路由 `routes`（按模型/内容/长度）、`fallbackModels` 回退 |
+| **协议** | Responses ⇄ chat/completions 翻译（`--upstream-api chat`）——文本、工具调用、reasoning |
+| **管控** | 在线 `transforms`（system prompt/规则/参数）、`guardrails`（出站拦截/脱敏） |
+| **治理** | 成本 `budget`（日/月上限，告警/拦截）、抓包敏感信息脱敏 |
+| **可观测** | 本地仪表盘（`http://127.0.0.1:<port+1>`）、`relay doctor`、`relay logs`、Token/成本抓取 |
+| **接入** | Codex 免登录（`auth.json`）、`--codex` 配置接线（带备份/还原） |
+
+`dprox relay <on|off|status|daemon|service|doctor|logs>`——详见 `dprox relay --help`。
 
 ---
 

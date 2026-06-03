@@ -23,6 +23,7 @@ It is a generalization of the [Codex++](./third-project/codex-plusplus) approach
 ## Table of Contents
 
 - [How It Works](#how-it-works)
+- [Model Relay (use any model in any IDE)](#model-relay)
 - [Repository Layout](#repository-layout)
 - [Requirements](#requirements)
 - [Build From Source](#build-from-source)
@@ -75,6 +76,40 @@ renderer window created
 
 Because the renderer runs sandboxed, plugin source is fetched from the main process
 over IPC and evaluated with `new Function(...)` inside the preload context.
+
+---
+
+## Model Relay
+
+A local proxy that an AI IDE's model client points at, so you can **observe,
+redirect, rewrite, fail over, translate, and govern** its model traffic — including
+IDEs whose model client runs *outside* the Electron app (e.g. Codex's native Rust
+core), which injection alone can't reach. Full guide: **[docs/model-relay.md](docs/model-relay.md)**.
+
+**Run it without injecting anything** (the simplest path for Codex):
+
+```bash
+# Point Codex at the relay → any OpenAI-compatible backend, bypass login, fix model names
+dprox relay on --codex --upstream https://api.deepseek.com/v1 --key sk-<KEY> \
+  --upstream-api chat --map "gpt-*=deepseek-v4-flash"
+dprox relay daemon            # or: dprox relay service install   (auto-start)
+dprox relay doctor            # verify the whole setup
+open /Applications/Codex.app  # no ChatGPT login; traffic flows through the relay
+```
+
+Capabilities (all via `config.relay`, applied live):
+
+| Area | What |
+|---|---|
+| **Run modes** | standalone daemon · background service (launchd/systemd/Task Scheduler) · inside the injected app |
+| **Routing** | model rewrite (`--map`), conditional `routes` (by model/content/size), `fallbackModels` failover |
+| **Protocol** | Responses ⇄ chat/completions translation (`--upstream-api chat`) — text, tool calls, reasoning |
+| **Control** | in-flight `transforms` (system prompt / rules / params), `guardrails` (block/redact outbound) |
+| **Governance** | cost `budget` (daily/monthly cap, warn/block), secret redaction in capture |
+| **Observability** | local dashboard (`http://127.0.0.1:<port+1>`), `relay doctor`, `relay logs`, token/cost capture |
+| **Setup** | Codex login bypass (`auth.json`), `--codex` config wiring with backup/restore |
+
+`dprox relay <on|off|status|daemon|service|doctor|logs>` — see `dprox relay --help`.
 
 ---
 
