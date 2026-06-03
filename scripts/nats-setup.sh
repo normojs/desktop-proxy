@@ -23,6 +23,9 @@
 
 set -euo pipefail
 
+# Binaries install to /usr/local/bin — ensure it's on PATH (RHEL/sudo shells often omit it).
+export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
+
 TLS="${TLS:-selfsigned}"; PM="${PM:-systemd}"; PORT="${PORT:-4222}"; WS_PORT="${WS_PORT:-8443}"
 VER="${VER:-v2.14.1}"; NATS_DIR="${NATS_DIR:-/etc/nats}"; DOMAIN="${DOMAIN:-}"; SKIP_NSC="${SKIP_NSC:-0}"
 PROXY="${PROXY:-}"; GH_MIRROR="${GH_MIRROR:-}"; FORCE_INSTALL="${FORCE_INSTALL:-0}"
@@ -81,11 +84,16 @@ if ! need nats-server || [ "$FORCE_INSTALL" = "1" ]; then
   TMP="$(mktemp -d)"
   dl "https://github.com/nats-io/nats-server/releases/download/${VER}/nats-server-${VER}-linux-$(arch).tar.gz" "$TMP/n.tgz" \
     || { echo "!! nats-server download failed — retry with PROXY=http://host:port or GH_MIRROR=https://ghfast.top/"; exit 1; }
-  tar -xzf "$TMP/n.tgz" -C "$TMP"; $SUDO install "$TMP"/nats-server-*/nats-server /usr/local/bin/nats-server; rm -rf "$TMP"
+  tar -xzf "$TMP/n.tgz" -C "$TMP" 2>/dev/null \
+    || { echo "!! extract failed — the download isn't a valid tarball (a mirror may have returned an error page). Try another GH_MIRROR= or PROXY=, or set VER= to a valid release."; exit 1; }
+  BIN="$(find "$TMP" -type f -name nats-server | head -1)"
+  [ -n "$BIN" ] || { echo "!! nats-server binary not found inside the archive"; exit 1; }
+  $SUDO install "$BIN" /usr/local/bin/nats-server
+  rm -rf "$TMP"
 else
   say "nats-server present ($(nats-server --version 2>/dev/null)); FORCE_INSTALL=1 to reinstall"
 fi
-need nats-server || { echo "!! nats-server not installed"; exit 1; }
+{ [ -x /usr/local/bin/nats-server ] || need nats-server; } || { echo "!! nats-server not installed"; exit 1; }
 
 if [ "$SKIP_NSC" != "1" ]; then
   ensure jq; ensure unzip
@@ -93,9 +101,10 @@ if [ "$SKIP_NSC" != "1" ]; then
     say "Installing nsc"
     dl "https://github.com/nats-io/nsc/releases/latest/download/nsc-linux-$(arch).zip" /tmp/nsc.zip \
       || { echo "!! nsc download failed — retry with PROXY=... or GH_MIRROR=https://ghfast.top/"; exit 1; }
-    $SUDO unzip -o /tmp/nsc.zip -d /usr/local/bin >/dev/null
+    $SUDO unzip -o /tmp/nsc.zip -d /usr/local/bin >/dev/null \
+      || { echo "!! nsc unzip failed — the download isn't a valid zip (mirror returned an error page?). Try another GH_MIRROR=/PROXY=."; exit 1; }
   fi
-  need nsc || { echo "!! nsc not installed (unzip ok? path /usr/local/bin writable?)"; exit 1; }
+  { [ -x /usr/local/bin/nsc ] || need nsc; } || { echo "!! nsc not installed (is /usr/local/bin writable?)"; exit 1; }
 fi
 
 $SUDO mkdir -p "$NATS_DIR/tls" "$NATS_DIR/jwt"
