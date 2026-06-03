@@ -12,7 +12,9 @@
  */
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+// launchd (macOS) and systemd (Linux) are posix-only, so build their unit paths
+// with posix separators regardless of the host running the build/tests.
+import { posix as path } from "node:path";
 
 /** macOS launchd label. */
 export const RELAY_MAC_LABEL = "com.desktop-proxy.relay";
@@ -78,9 +80,9 @@ export function buildRelayWindowsTaskCreateArgs(spec: RelayServiceSpec): string[
 // ── on-disk locations ─────────────────────────────────────────────────────────
 
 export function relayLaunchdPlistPath(home = homedir()): string {
-  return join(home, "Library", "LaunchAgents", `${RELAY_MAC_LABEL}.plist`);
+  return path.join(home, "Library", "LaunchAgents", `${RELAY_MAC_LABEL}.plist`);
 }
 
 export function relaySystemdServicePath(home = homedir()): string {
-  return join(home, ".config", "systemd", "user", `${RELAY_UNIT_NAME}.service`);
+  return path.join(home, ".config", "systemd", "user", `${RELAY_UNIT_NAME}.service`);
 }
