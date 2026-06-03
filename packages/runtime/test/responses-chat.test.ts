@@ -60,6 +60,24 @@ describe("responsesToChat (request translation)", () => {
       { type: "function", function: { name: "read_file", description: "read", parameters: { type: "object" } } },
     ]);
   });
+
+  it("groups consecutive (parallel) function_calls into one assistant message", () => {
+    const chat = responsesToChat({
+      model: "m",
+      input: [
+        { type: "function_call", call_id: "c1", name: "a", arguments: "{}" },
+        { type: "function_call", call_id: "c2", name: "b", arguments: "{}" },
+        { type: "function_call_output", call_id: "c1", output: "r1" },
+        { type: "function_call_output", call_id: "c2", output: "r2" },
+      ],
+    });
+    const messages = chat.messages as Array<Record<string, unknown>>;
+    // One assistant message with BOTH tool_calls, then the two tool results.
+    expect(messages).toHaveLength(3);
+    expect((messages[0].tool_calls as unknown[]).length).toBe(2);
+    expect(messages[1]).toMatchObject({ role: "tool", tool_call_id: "c1" });
+    expect(messages[2]).toMatchObject({ role: "tool", tool_call_id: "c2" });
+  });
 });
 
 describe("chatUsageToResponses", () => {

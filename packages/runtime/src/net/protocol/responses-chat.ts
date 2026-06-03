@@ -66,23 +66,27 @@ function inputToMessages(input: unknown, messages: Json[]): void {
   }
   if (!Array.isArray(input)) return;
   let pendingReasoning = "";
-  for (const raw of input) {
-    const item = raw as Json;
+  for (let i = 0; i < input.length; i++) {
+    const item = input[i] as Json;
     const type = item?.type as string | undefined;
     if (type === "reasoning") {
       pendingReasoning = reasoningTextOf(item) || pendingReasoning;
     } else if (type === "function_call") {
-      const msg: Json = {
-        role: "assistant",
-        content: null,
-        tool_calls: [
-          {
-            id: String(item.call_id ?? item.id ?? ""),
-            type: "function",
-            function: { name: String(item.name ?? ""), arguments: String(item.arguments ?? "") },
-          },
-        ],
-      };
+      // Chat/completions requires an assistant message's tool_calls to be
+      // followed by their tool results — so group *consecutive* parallel calls
+      // into ONE assistant message (Codex emits them as separate input items).
+      const toolCalls: Json[] = [];
+      while (i < input.length && (input[i] as Json)?.type === "function_call") {
+        const fc = input[i] as Json;
+        toolCalls.push({
+          id: String(fc.call_id ?? fc.id ?? ""),
+          type: "function",
+          function: { name: String(fc.name ?? ""), arguments: String(fc.arguments ?? "") },
+        });
+        i++;
+      }
+      i--; // the for-loop will advance past the last consumed item
+      const msg: Json = { role: "assistant", content: null, tool_calls: toolCalls };
       if (pendingReasoning) {
         msg.reasoning_content = pendingReasoning;
         pendingReasoning = "";
