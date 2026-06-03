@@ -35,11 +35,20 @@ describe("subjects", () => {
 });
 
 describe("pairing", () => {
-  it("round-trips a pairing payload through a QR string", () => {
-    const p = buildPairingPayload({ instanceId: "i1", url: "tls://host:4222", user: "dev_i1", pass: "secret", name: "My Mac" });
+  it("round-trips a pairing payload (incl. wsUrl for browser/phone clients)", () => {
+    const p = buildPairingPayload({
+      instanceId: "i1",
+      url: "tls://host:4222",
+      wsUrl: "wss://host:8443",
+      jwt: "ey.j.w.t",
+      seed: "SUASEED",
+      name: "My Mac",
+    });
     const s = pairingToString(p);
     expect(s.startsWith("desktopproxy://pair?d=")).toBe(true);
-    expect(pairingFromString(s)).toEqual(p);
+    const back = pairingFromString(s);
+    expect(back).toEqual(p);
+    expect(back?.wsUrl).toBe("wss://host:8443");
   });
   it("rejects malformed pairing strings", () => {
     expect(pairingFromString("nope")).toBeNull();

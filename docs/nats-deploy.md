@@ -75,7 +75,9 @@ sudo certbot certonly --webroot -w /var/www/html -d nats.your-domain.com --non-i
 
 脚本结尾打印 `remote` 块(也存 `~/desktop-proxy-remote.json`),例如:
 ```json
-{ "remote": { "enabled": true, "url": "tls://nats.your-domain.com:4222",
+{ "remote": { "enabled": true,
+  "url": "tls://nats.your-domain.com:4222",
+  "wsUrl": "wss://nats.your-domain.com:8443",
   "accountSeed": "SA...", "accountId": "A..." } }
 ```
 - 粘进每台桌面的 `~/.desktop-proxy/config.json` → 重启被注入的 app(日志 `~/.desktop-proxy/log/main.log` 出现 `remote bus connected`)。

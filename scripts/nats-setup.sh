@@ -181,9 +181,10 @@ if [ "$SKIP_NSC" != "1" ]; then
   set -e
 fi
 
-URL="tls://${HOST_ADDR}:${PORT}"; SUMMARY="$HOME/desktop-proxy-remote.json"
+URL="tls://${HOST_ADDR}:${PORT}"; WS_URL="wss://${HOST_ADDR}:${WS_PORT}"; SUMMARY="$HOME/desktop-proxy-remote.json"
 {
   echo "{"; echo "  \"remote\": {"; echo "    \"enabled\": true,"; echo "    \"url\": \"$URL\","
+  echo "    \"wsUrl\": \"$WS_URL\","
   [ -n "$ACCOUNT_SEED" ] && echo "    \"accountSeed\": \"$ACCOUNT_SEED\","
   [ -n "$ACCOUNT_ID" ]   && echo "    \"accountId\": \"$ACCOUNT_ID\""
   [ "$TLS" = "selfsigned" ] && echo "    , \"caFile\": \"<copy $CERT onto the desktop, set its path here>\""

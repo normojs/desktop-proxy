@@ -20,6 +20,7 @@ interface PairingPayload {
   v: 1;
   instanceId: string;
   url: string;
+  wsUrl?: string;
   name?: string;
   jwt?: string;
   seed?: string;
@@ -55,6 +56,7 @@ const CONFIG_FILE = join(USER_ROOT, "config.json");
 
 interface RemoteCfg {
   url?: string;
+  wsUrl?: string;
   accountSeed?: string;
   accountId?: string;
   deviceUser?: string;
@@ -93,12 +95,13 @@ export async function pair(opts: { name?: string } = {}): Promise<void> {
     return;
   }
 
+  const ws = r.wsUrl ? { wsUrl: r.wsUrl } : {};
   let payload: PairingPayload;
   if (jwtMode) {
     const creds = await mintDevice(r.accountSeed!, r.accountId!, cfg.instanceId!);
-    payload = { v: 1, instanceId: cfg.instanceId!, url: r.url!, name: opts.name ?? "desktop-proxy", jwt: creds.jwt, seed: creds.seed };
+    payload = { v: 1, instanceId: cfg.instanceId!, url: r.url!, ...ws, name: opts.name ?? "desktop-proxy", jwt: creds.jwt, seed: creds.seed };
   } else {
-    payload = { v: 1, instanceId: cfg.instanceId!, url: r.url!, name: opts.name ?? "desktop-proxy", user: r.deviceUser, pass: r.devicePass };
+    payload = { v: 1, instanceId: cfg.instanceId!, url: r.url!, ...ws, name: opts.name ?? "desktop-proxy", user: r.deviceUser, pass: r.devicePass };
   }
 
   const link = pairingToString(payload);

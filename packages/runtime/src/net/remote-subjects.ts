@@ -48,8 +48,10 @@ export function methodFromSubject(subject: string): string | null {
 export interface PairingPayload {
   v: 1;
   instanceId: string;
-  /** NATS server URL the client connects to (e.g. tls://host:4222 or wss://host). */
+  /** NATS server URL for native clients (desktop/CLI), e.g. tls://host:4222. */
   url: string;
+  /** WebSocket URL for browser/phone clients (nats.ws), e.g. wss://host:8443. */
+  wsUrl?: string;
   /** Human label for the paired desktop. */
   name?: string;
   /** Decentralized JWT credentials (recommended): minted user JWT + nkey seed. */
