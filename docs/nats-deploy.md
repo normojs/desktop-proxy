@@ -24,10 +24,15 @@ sudo DOMAIN=nats.dprox.mbu.ltd TLS=letsencrypt PM=systemd bash nats-setup.sh
 # 无域名快速自测(自签证书,管道直跑)
 curl -fsSL https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh | sudo bash
 
-# Docker(restart=unless-stopped 即开机自启)
+# Docker(restart=unless-stopped 即开机自启;脚本会自动装 Docker、以 root 容器挂载证书)
 curl -fsSL https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh -o nats-setup.sh
 sudo PM=docker DOMAIN=nats.your-domain.com TLS=letsencrypt bash nats-setup.sh
+# 已有 nginx/证书时用 TLS=existing(容器会自动挂载 /etc/letsencrypt 只读):
+sudo PM=docker TLS=existing DOMAIN=nats.your-domain.com \
+  CERT_FILE=/etc/letsencrypt/live/nats.your-domain.com/fullchain.pem \
+  KEY_FILE=/etc/letsencrypt/live/nats.your-domain.com/privkey.pem bash nats-setup.sh
 ```
+> Docker 模式:不装宿主 nats-server(用 `nats:2.14` 镜像);nsc 仍在宿主生成账号(MEMORY resolver 嵌进配置,经 `-v /etc/nats` 挂载);容器以 `-u 0:0` 运行以便读取 letsencrypt 私钥。
 变量:`DOMAIN`(可选)、`TLS=letsencrypt|selfsigned`、`PM=systemd|pm2|docker`、`PORT`(4222)、`WS_PORT`(8443)、`SKIP_NSC=1`(跳过账号自动化)、`FORCE_INSTALL=1`(重装二进制)。
 
 **国内网络(下载 github 慢/失败)**:用代理或 GitHub 镜像(二选一):

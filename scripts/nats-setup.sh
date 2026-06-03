@@ -79,7 +79,9 @@ if [ -n "$PM_INSTALL" ]; then say "Package manager: ${PM_INSTALL%% *}"; else say
 
 # ── 1. dependencies + nats-server + nsc ──────────────────────────────────────
 ensure curl; ensure tar
-if ! need nats-server || [ "$FORCE_INSTALL" = "1" ]; then
+if [ "$PM" = "docker" ]; then
+  say "PM=docker — NATS runs from the official image; skipping host binary install"
+elif ! need nats-server || [ "$FORCE_INSTALL" = "1" ]; then
   say "Installing nats-server $VER"
   TMP="$(mktemp -d)"
   dl "https://github.com/nats-io/nats-server/releases/download/${VER}/nats-server-${VER}-linux-$(arch).tar.gz" "$TMP/n.tgz" \
@@ -93,7 +95,7 @@ if ! need nats-server || [ "$FORCE_INSTALL" = "1" ]; then
 else
   say "nats-server present ($(nats-server --version 2>/dev/null)); FORCE_INSTALL=1 to reinstall"
 fi
-{ [ -x /usr/local/bin/nats-server ] || need nats-server; } || { echo "!! nats-server not installed"; exit 1; }
+[ "$PM" = "docker" ] || { [ -x /usr/local/bin/nats-server ] || need nats-server; } || { echo "!! nats-server not installed"; exit 1; }
 
 if [ "$SKIP_NSC" != "1" ]; then
   ensure jq; ensure unzip
@@ -196,9 +198,23 @@ start_pm2() {
   pm2 save; pm2 startup | tail -1 || true
 }
 start_docker() {
+  if ! need docker; then
+    say "Installing Docker (get.docker.com)"
+    if [ -n "$PROXY" ]; then curl -fsSL --proxy "$PROXY" https://get.docker.com | $SUDO sh; else curl -fsSL https://get.docker.com | $SUDO sh; fi
+  fi
+  need docker || { echo "!! Docker not available — install it manually then re-run."; exit 1; }
+  $SUDO systemctl enable --now docker >/dev/null 2>&1 || true   # daemon boot autostart
+  # Mount cert dirs so the container can read them (run as root to read 600 keys).
+  local mounts=(-v "$NATS_DIR:$NATS_DIR")
+  case "$CERT" in
+    "$NATS_DIR"/*) : ;;                                                   # self-signed under NATS_DIR
+    /etc/letsencrypt/*) mounts+=(-v "/etc/letsencrypt:/etc/letsencrypt:ro") ;;
+    *) mounts+=(-v "$(dirname "$CERT"):$(dirname "$CERT"):ro") ;;
+  esac
   $SUDO docker rm -f nats >/dev/null 2>&1 || true
-  $SUDO docker run -d --name nats --restart unless-stopped -p "$PORT:$PORT" -p "$WS_PORT:$WS_PORT" \
-    -v "$NATS_DIR:$NATS_DIR" nats:2.14 -c "$NATS_DIR/nats-server.conf"
+  $SUDO docker run -d --name nats --restart unless-stopped -u 0:0 \
+    -p "$PORT:$PORT" -p "$WS_PORT:$WS_PORT" "${mounts[@]}" \
+    nats:2.14 -c "$NATS_DIR/nats-server.conf"
 }
 say "Starting nats-server via $PM (boot autostart)"
 case "$PM" in systemd) start_systemd;; pm2) start_pm2;; docker) start_docker;; *) echo "bad PM=$PM"; exit 1;; esac
