@@ -7,7 +7,14 @@ on:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    name: build-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Cross-platform guard: the installer's path/layout/platform logic and the
+        # runtime/relay must build + pass tests on all three desktop OSes.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
