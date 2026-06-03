@@ -29,7 +29,7 @@ import { isBackendName, type BackendName } from "./backends/index.js";
 import { proxy, type ProxySubcommand } from "./commands/proxy.js";
 import { permissions } from "./commands/permissions.js";
 import { pair } from "./commands/pair.js";
-import { relay, type RelaySubcommand } from "./commands/relay.js";
+import { relay, relayService, type RelaySubcommand, type RelayServiceAction } from "./commands/relay.js";
 
 function printHelp(): void {
   console.log(`
@@ -59,6 +59,7 @@ Usage:
   desktop-proxy permissions [--open <id>] Re-grant OS permissions after install (macOS TCC; opens Settings)
   desktop-proxy pair [--name <label>] Show a QR/link to pair a phone with the remote bus (NATS; see docs/nats-deploy.md)
   desktop-proxy relay <on|off|status|daemon> Local model-traffic relay: capture/rewrite/translate model calls. "daemon" runs it standalone (no app injection needed for Codex); "--codex" wires ~/.codex/config.toml + login bypass
+  desktop-proxy relay service <install|uninstall|status> Run the relay daemon as a background service (launchd/systemd/Task Scheduler; auto-start)
 
 Options:
   --app <path>      Path to the .app bundle (auto-detected if omitted)
@@ -249,8 +250,17 @@ async function main(): Promise<void> {
 
     case "relay": {
       const sub = (positionals[1] as RelaySubcommand | undefined) ?? "status";
+      if (sub === "service") {
+        const action = (positionals[2] as RelayServiceAction | undefined) ?? "status";
+        if (action !== "install" && action !== "uninstall" && action !== "status") {
+          console.error(`Unknown relay service action "${action}". Use: install | uninstall | status.`);
+          process.exit(1);
+        }
+        relayService(action);
+        break;
+      }
       if (sub !== "on" && sub !== "off" && sub !== "status" && sub !== "daemon") {
-        console.error(`Unknown relay subcommand "${sub}". Use: on | off | status | daemon.`);
+        console.error(`Unknown relay subcommand "${sub}". Use: on | off | status | daemon | service.`);
         process.exit(1);
       }
       const modelMap = typeof opts.map === "string" ? parseModelMap(opts.map) : undefined;

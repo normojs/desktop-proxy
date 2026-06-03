@@ -74,8 +74,10 @@ relay itself; the IDE core re-reads its own config on launch).
 ```bash
 # Point Codex's core at the relay + bypass login (writes config.toml + auth.json; no sudo)
 dprox relay on --codex --upstream https://api.deepseek.com/v1 --key sk-<KEY> --upstream-api chat --map "gpt-*=deepseek-v4-flash"
-# Run the standalone relay (Ctrl-C to stop; or wrap as a launchd/systemd service)
+# Run the standalone relay — foreground (Ctrl-C to stop)…
 dprox relay daemon
+# …or as an auto-starting background service (launchd / systemd / Task Scheduler):
+dprox relay service install     # uninstall | status
 # Launch Codex normally — no login, model traffic flows through the daemon.
 ```
 

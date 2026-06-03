@@ -8,11 +8,11 @@
  * non-destructively in front of an existing relay (e.g. CodexPlusPlus's 57321).
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync, rmSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
 
 import {
   applyCodexRelay,
@@ -21,9 +21,20 @@ import {
   hasDproxRelay,
 } from "../codex-config.js";
 import { getIdeAdapter } from "../ide/adapters.js";
+import {
+  buildRelayLaunchdPlist,
+  buildRelaySystemdService,
+  buildRelayWindowsTaskCreateArgs,
+  relayLaunchdPlistPath,
+  relaySystemdServicePath,
+  RELAY_MAC_LABEL,
+  RELAY_UNIT_NAME,
+  type RelayServiceSpec,
+} from "../relay-service.js";
 
 const USER_ROOT = join(homedir(), ".desktop-proxy");
 const CONFIG_FILE = join(USER_ROOT, "config.json");
+const LOG_DIR = join(USER_ROOT, "log");
 const CODEX_DIR = join(homedir(), ".codex");
 const CODEX_CONFIG = join(CODEX_DIR, "config.toml");
 const CODEX_AUTH = join(CODEX_DIR, "auth.json");
@@ -96,7 +107,7 @@ function resolveRedirectIde(opts: RelayOptions): string | null {
   return id;
 }
 
-export type RelaySubcommand = "on" | "off" | "status" | "daemon";
+export type RelaySubcommand = "on" | "off" | "status" | "daemon" | "service";
 
 export interface RelayOptions {
   upstream?: string;
@@ -155,6 +166,118 @@ function relayDaemon(): void {
   console.log(`\n  Starting relay daemon (Ctrl-C to stop) — no app injection needed for config-redirect IDEs.\n`);
   const child = spawn(process.execPath, [daemon], { stdio: "inherit" });
   child.on("exit", (code) => process.exit(code ?? 0));
+}
+
+export type RelayServiceAction = "install" | "uninstall" | "status";
+
+/** Run the relay daemon as a managed background service (auto-start + restart). */
+export function relayService(action: RelayServiceAction): void {
+  const plat = platform();
+  if (action === "uninstall") return relayServiceUninstall(plat);
+  if (action === "status") return relayServiceStatus(plat);
+
+  const cfg = readConfig();
+  if (cfg.relay?.enabled !== true || !cfg.relay.upstream) {
+    console.error(`\n  Relay is not enabled. Run "dprox relay on ..." first.\n`);
+    process.exit(1);
+  }
+  const daemon = resolveDaemon();
+  if (!daemon) {
+    console.error(`\n  relay-daemon.js not found. Build the runtime first: pnpm build:runtime\n`);
+    process.exit(1);
+  }
+  mkdirSync(LOG_DIR, { recursive: true });
+  const spec: RelayServiceSpec = { daemonArgs: [process.execPath, daemon], logFile: join(LOG_DIR, "relay-daemon.out") };
+
+  if (plat === "darwin") {
+    const plist = relayLaunchdPlistPath();
+    mkdirSync(dirname(plist), { recursive: true });
+    writeFileSync(plist, buildRelayLaunchdPlist(spec));
+    spawnSync("launchctl", ["unload", plist], { stdio: "ignore" });
+    const loaded = spawnSync("launchctl", ["load", "-w", plist], { encoding: "utf8" });
+    if (loaded.status !== 0) {
+      console.error(`\n  launchctl load failed: ${(loaded.stderr || loaded.stdout || "").trim()}\n`);
+      process.exit(1);
+    }
+    console.log(`\n  ✓ Relay service installed (launchd, auto-start + keep-alive).`);
+    console.log(`    Listen: http://127.0.0.1:${cfg.relay.port ?? DEFAULT_PORT}  Log: ${spec.logFile}\n`);
+    return;
+  }
+  if (plat === "linux") {
+    const unit = relaySystemdServicePath();
+    mkdirSync(dirname(unit), { recursive: true });
+    writeFileSync(unit, buildRelaySystemdService(spec));
+    spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+    const enabled = spawnSync("systemctl", ["--user", "enable", "--now", `${RELAY_UNIT_NAME}.service`], { encoding: "utf8" });
+    if (enabled.status !== 0) {
+      console.error(`\n  systemctl enable failed: ${(enabled.stderr || enabled.stdout || "").trim()}`);
+      console.error(`  Unit written to ${unit}; enable manually if needed.\n`);
+      process.exit(1);
+    }
+    console.log(`\n  ✓ Relay service installed (systemd user, Restart=always).`);
+    console.log(`    Listen: http://127.0.0.1:${cfg.relay.port ?? DEFAULT_PORT}  Log: ${spec.logFile}\n`);
+    return;
+  }
+  if (plat === "win32") {
+    const created = spawnSync("schtasks", buildRelayWindowsTaskCreateArgs(spec), { encoding: "utf8" });
+    if (created.status !== 0) {
+      console.error(`\n  schtasks create failed: ${(created.stderr || created.stdout || "").trim()}\n`);
+      process.exit(1);
+    }
+    console.log(`\n  ✓ Relay service installed (Task Scheduler, starts at logon).\n`);
+    return;
+  }
+  console.error(`\n  Unsupported platform: ${plat}\n`);
+  process.exit(1);
+}
+
+function relayServiceUninstall(plat: string): void {
+  if (plat === "darwin") {
+    const plist = relayLaunchdPlistPath();
+    spawnSync("launchctl", ["unload", "-w", plist], { stdio: "ignore" });
+    try {
+      unlinkSync(plist);
+    } catch {
+      /* gone */
+    }
+  } else if (plat === "linux") {
+    spawnSync("systemctl", ["--user", "disable", "--now", `${RELAY_UNIT_NAME}.service`], { stdio: "ignore" });
+    try {
+      rmSync(relaySystemdServicePath(), { force: true });
+    } catch {
+      /* gone */
+    }
+    spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+  } else if (plat === "win32") {
+    spawnSync("schtasks", ["/Delete", "/TN", RELAY_UNIT_NAME, "/F"], { stdio: "ignore" });
+  }
+  console.log(`\n  Relay service removed.\n`);
+}
+
+function relayServiceStatus(plat: string): void {
+  let installed = false;
+  let active = false;
+  let detail = "";
+  if (plat === "darwin") {
+    const plist = relayLaunchdPlistPath();
+    installed = existsSync(plist);
+    active = (spawnSync("launchctl", ["list"], { encoding: "utf8" }).stdout ?? "").includes(RELAY_MAC_LABEL);
+    detail = plist;
+  } else if (plat === "linux") {
+    installed = existsSync(relaySystemdServicePath());
+    active = (spawnSync("systemctl", ["--user", "is-active", `${RELAY_UNIT_NAME}.service`], { encoding: "utf8" }).stdout ?? "")
+      .trim()
+      .startsWith("active");
+    detail = relaySystemdServicePath();
+  } else if (plat === "win32") {
+    const q = spawnSync("schtasks", ["/Query", "/TN", RELAY_UNIT_NAME], { encoding: "utf8" });
+    installed = q.status === 0;
+    active = installed;
+    detail = RELAY_UNIT_NAME;
+  }
+  const state = installed ? (active ? "installed (active)" : "installed (inactive)") : "not installed";
+  console.log(`\n  Relay service: ${state}`);
+  if (detail) console.log(`  ${detail}\n`);
 }
 
 function relayOn(opts: RelayOptions): void {
