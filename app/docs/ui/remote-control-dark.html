@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>dprox — remote control (dark)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body class="bg-[#08090b] text-[#ededf0] min-h-screen" style="font-family:'Inter',system-ui,sans-serif">
+
+<div class="max-w-[980px] mx-auto px-5 py-8">
+
+  <div class="flex items-center justify-between mb-6">
+    <div class="flex items-center gap-2.5">
+      <div class="w-8 h-8 rounded-lg bg-white text-[#08090b] flex items-center justify-center text-[15px] font-semibold" style="letter-spacing:-0.04em">d</div>
+      <div>
+        <div class="text-[15px] font-semibold tracking-tight leading-none">dprox remote</div>
+        <div class="text-[12px] text-[#8a8f98] mt-0.5">phone control panel — dark</div>
+      </div>
+    </div>
+    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#15161a] border border-[#26272d] text-[12px] text-[#8a8f98]">
+      <span class="w-1.5 h-1.5 rounded-full bg-[#34d399]"></span> dark · tech
+    </span>
+  </div>
+
+  <div class="flex flex-wrap gap-8 justify-center">
+
+    <!-- Overview -->
+    <div class="w-[372px] shrink-0">
+      <div class="rounded-[42px] bg-black p-2.5 shadow-2xl ring-1 ring-[#1c1d22]">
+        <div class="rounded-[34px] bg-[#0c0d11] overflow-hidden relative" style="height:760px">
+          <div class="flex items-center justify-between px-6 pt-3.5 pb-1 text-[12px] font-medium text-[#ededf0]">
+            <span>9:41</span>
+            <div class="flex items-center gap-1.5">
+              <i data-lucide="signal" class="w-3.5 h-3.5" style="stroke-width:1.5"></i>
+              <i data-lucide="wifi" class="w-3.5 h-3.5" style="stroke-width:1.5"></i>
+              <i data-lucide="battery-full" class="w-4 h-4" style="stroke-width:1.5"></i>
+            </div>
+          </div>
+          <div class="overflow-y-auto px-5 pb-24" style="height:712px">
+            <div class="flex items-center justify-between pt-3 pb-4">
+              <div>
+                <div class="text-[22px] font-semibold tracking-tight leading-none">Overview</div>
+                <div class="flex items-center gap-1.5 mt-2 text-[12.5px] text-[#8a8f98]">
+                  <i data-lucide="monitor" class="w-3.5 h-3.5" style="stroke-width:1.5"></i> fushilu — MacBook Pro
+                  <span class="w-1 h-1 rounded-full bg-[#34d399] ml-0.5"></span><span class="text-[#34d399]">connected</span>
+                </div>
+              </div>
+              <button class="w-9 h-9 rounded-full bg-[#15161a] border border-[#26272d] flex items-center justify-center"><i data-lucide="bell" class="w-[18px] h-[18px] text-[#b6bac2]" style="stroke-width:1.5"></i></button>
+            </div>
+
+            <div class="rounded-2xl bg-[#15161a] border border-[#26272d] p-5 mb-3.5">
+              <div class="flex items-start justify-between">
+                <div>
+                  <div class="text-[12px] text-[#8a8f98] font-medium uppercase" style="letter-spacing:0.04em">Spent today</div>
+                  <div class="text-[34px] font-semibold tracking-tight leading-tight mt-1">$0.42</div>
+                  <div class="text-[12.5px] text-[#8a8f98] mt-0.5">of $5.00 daily budget</div>
+                </div>
+                <div class="relative w-[68px] h-[68px] rounded-full" style="background:conic-gradient(#4f8cff 0% 8.4%, #23252b 8.4% 100%)">
+                  <div class="absolute inset-[7px] bg-[#15161a] rounded-full flex items-center justify-center"><span class="text-[14px] font-semibold tracking-tight">8%</span></div>
+                </div>
+              </div>
+              <div class="grid grid-cols-3 gap-2 mt-4 pt-4 border-t border-[#23252b]">
+                <div><div class="text-[17px] font-semibold tracking-tight">128</div><div class="text-[11.5px] text-[#8a8f98]">requests</div></div>
+                <div><div class="text-[17px] font-semibold tracking-tight">1.21M</div><div class="text-[11.5px] text-[#8a8f98]">tokens</div></div>
+                <div><div class="text-[17px] font-semibold tracking-tight text-[#34d399]">100%</div><div class="text-[11.5px] text-[#8a8f98]">success</div></div>
+              </div>
+            </div>
+
+            <div class="rounded-2xl bg-[#15161a] border border-[#26272d] p-4 mb-3.5 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-xl bg-[#15233f] flex items-center justify-center"><i data-lucide="route" class="w-[18px] h-[18px] text-[#4f8cff]" style="stroke-width:1.5"></i></div>
+                <div><div class="text-[14px] font-semibold tracking-tight leading-none">Model relay</div><div class="text-[12px] text-[#8a8f98] mt-1">api.deepseek.com · :8788</div></div>
+              </div>
+              <div class="w-[46px] h-[27px] rounded-full bg-[#4f8cff] p-[3px] flex items-center justify-end"><div class="w-[21px] h-[21px] rounded-full bg-white shadow"></div></div>
+            </div>
+
+            <div class="flex items-center justify-between mb-2.5 mt-5"><div class="text-[13px] font-semibold tracking-tight text-[#b6bac2]">Live traffic</div><span class="text-[12px] text-[#4f8cff] font-medium">See all</span></div>
+            <div class="rounded-2xl bg-[#15161a] border border-[#26272d] divide-y divide-[#23252b] overflow-hidden">
+              <div class="flex items-center gap-3 px-4 py-3"><span class="w-1.5 h-1.5 rounded-full bg-[#34d399]"></span><div class="min-w-0 flex-1"><div class="text-[13px] font-medium tracking-tight truncate">deepseek-v4-flash</div><div class="text-[11.5px] text-[#8a8f98]">POST /chat/completions · 9:41:02</div></div><div class="text-right"><div class="text-[12.5px] font-medium tabular-nums">$0.0034</div><div class="text-[11px] text-[#8a8f98] tabular-nums">11.9k tok</div></div></div>
+              <div class="flex items-center gap-3 px-4 py-3"><span class="w-1.5 h-1.5 rounded-full bg-[#34d399]"></span><div class="min-w-0 flex-1"><div class="text-[13px] font-medium tracking-tight truncate">deepseek-reasoner</div><div class="text-[11.5px] text-[#8a8f98]">POST /chat/completions · 9:40:55</div></div><div class="text-right"><div class="text-[12.5px] font-medium tabular-nums">$0.0061</div><div class="text-[11px] text-[#8a8f98] tabular-nums">12.3k tok</div></div></div>
+              <div class="flex items-center gap-3 px-4 py-3"><span class="w-1.5 h-1.5 rounded-full bg-[#f87171]"></span><div class="min-w-0 flex-1"><div class="text-[13px] font-medium tracking-tight truncate">deepseek-v4-flash</div><div class="text-[11.5px] text-[#8a8f98]">429 · retried → ok · 9:40:40</div></div><div class="text-right"><div class="text-[12.5px] font-medium tabular-nums text-[#f87171]">429</div><div class="text-[11px] text-[#8a8f98] tabular-nums">failover</div></div></div>
+            </div>
+          </div>
+
+          <div class="absolute bottom-0 inset-x-0 bg-[#0c0d11]/90 backdrop-blur border-t border-[#23252b] px-6 pt-2.5 pb-6 flex items-center justify-between">
+            <div class="flex flex-col items-center gap-1 text-[#4f8cff]"><i data-lucide="layout-dashboard" class="w-[21px] h-[21px]" style="stroke-width:1.5"></i><span class="text-[10px] font-medium">Overview</span></div>
+            <div class="flex flex-col items-center gap-1 text-[#6b7079]"><i data-lucide="messages-square" class="w-[21px] h-[21px]" style="stroke-width:1.5"></i><span class="text-[10px] font-medium">Chat</span></div>
+            <div class="flex flex-col items-center gap-1 text-[#6b7079]"><i data-lucide="sliders-horizontal" class="w-[21px] h-[21px]" style="stroke-width:1.5"></i><span class="text-[10px] font-medium">Relay</span></div>
+            <div class="flex flex-col items-center gap-1 text-[#6b7079]"><i data-lucide="blocks" class="w-[21px] h-[21px]" style="stroke-width:1.5"></i><span class="text-[10px] font-medium">Plugins</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="text-center text-[12px] text-[#6b7079] mt-3">Overview</div>
+    </div>
+
+    <!-- Conversation -->
+    <div class="w-[372px] shrink-0">
+      <div class="rounded-[42px] bg-black p-2.5 shadow-2xl ring-1 ring-[#1c1d22]">
+        <div class="rounded-[34px] bg-[#0c0d11] overflow-hidden relative" style="height:760px">
+          <div class="flex items-center justify-between px-6 pt-3.5 pb-1 text-[12px] font-medium">
+            <span>9:41</span>
+            <div class="flex items-center gap-1.5"><i data-lucide="signal" class="w-3.5 h-3.5" style="stroke-width:1.5"></i><i data-lucide="wifi" class="w-3.5 h-3.5" style="stroke-width:1.5"></i><i data-lucide="battery-full" class="w-4 h-4" style="stroke-width:1.5"></i></div>
+          </div>
+          <div class="px-5 py-3 border-b border-[#23252b] bg-[#0c0d11]/70 backdrop-blur flex items-center gap-3">
+            <i data-lucide="chevron-left" class="w-5 h-5 text-[#b6bac2]" style="stroke-width:1.5"></i>
+            <div class="min-w-0 flex-1"><div class="text-[14px] font-semibold tracking-tight truncate leading-none">Browser terminal emulator</div><div class="text-[11.5px] text-[#8a8f98] mt-1">deepseek-v4-flash · $0.18 · 14 turns</div></div>
+            <span class="relative flex w-2 h-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#4f8cff] opacity-60"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-[#4f8cff]"></span></span>
+          </div>
+          <div class="overflow-y-auto px-4 py-4 space-y-3.5" style="height:600px">
+            <div class="rounded-xl bg-[#15161a] border border-[#26272d] p-3.5">
+              <div class="flex items-center gap-2 mb-2.5"><i data-lucide="list-checks" class="w-4 h-4 text-[#4f8cff]" style="stroke-width:1.5"></i><span class="text-[12.5px] font-semibold tracking-tight">Plan</span><span class="text-[11px] text-[#8a8f98] ml-auto">update_plan</span></div>
+              <div class="space-y-1.5 text-[12.5px]">
+                <div class="flex items-center gap-2 text-[#6b7079] line-through"><i data-lucide="check" class="w-3.5 h-3.5 text-[#34d399]" style="stroke-width:2"></i> Virtual filesystem module</div>
+                <div class="flex items-center gap-2 text-[#6b7079] line-through"><i data-lucide="check" class="w-3.5 h-3.5 text-[#34d399]" style="stroke-width:2"></i> Command parser + pipes</div>
+                <div class="flex items-center gap-2 text-[#ededf0] font-medium"><span class="w-3.5 h-3.5 rounded-full border-2 border-[#4f8cff] flex items-center justify-center"><span class="w-1.5 h-1.5 rounded-full bg-[#4f8cff]"></span></span> Wire input handling</div>
+              </div>
+            </div>
+            <div class="flex justify-end"><div class="max-w-[80%] rounded-2xl rounded-br-md bg-[#4f8cff] text-white px-3.5 py-2.5 text-[13px] leading-relaxed">Add tab-completion for commands and paths.</div></div>
+            <div class="rounded-xl bg-[#15161a] border border-[#26272d] px-3.5 py-2.5">
+              <div class="flex items-center gap-2 text-[12px] text-[#8a8f98]"><i data-lucide="brain" class="w-3.5 h-3.5" style="stroke-width:1.5"></i><span class="font-medium">Thought for 4s</span><i data-lucide="chevron-down" class="w-3.5 h-3.5 ml-auto" style="stroke-width:1.5"></i></div>
+              <div class="text-[12.5px] text-[#a7abb3] mt-2 leading-relaxed">I'll read the input handler, then add a completion pass over the command registry and the virtual FS path at the cursor…</div>
+            </div>
+            <div class="space-y-2">
+              <div class="text-[13px] leading-relaxed">I'll add completion in <span class="px-1.5 py-0.5 rounded bg-[#1c1d22] text-[12px]" style="font-family:ui-monospace,monospace">js/input.js</span>:</div>
+              <div class="rounded-xl bg-[#15161a] border border-[#26272d] overflow-hidden">
+                <div class="flex items-center gap-2 px-3 py-2 border-b border-[#23252b]"><i data-lucide="file-pen" class="w-3.5 h-3.5 text-[#4f8cff]" style="stroke-width:1.5"></i><span class="text-[12px] font-medium tracking-tight">apply_patch</span><span class="text-[11px] text-[#34d399] ml-auto tabular-nums">+27 −4</span></div>
+                <div class="px-3 py-2 text-[12px]" style="font-family:ui-monospace,monospace"><span class="text-[#34d399]">+ function complete(line) {</span><br><span class="text-[#6b7079]">  // match registry + fs paths…</span></div>
+              </div>
+            </div>
+            <div class="flex items-center gap-3 text-[11px] text-[#6b7079] px-1"><span class="inline-flex items-center gap-1"><i data-lucide="coins" class="w-3 h-3" style="stroke-width:1.5"></i> 12,401 tok · $0.0034</span><span class="inline-flex items-center gap-1 ml-auto"><i data-lucide="file-pen" class="w-3 h-3" style="stroke-width:1.5"></i> js/input.js</span></div>
+          </div>
+          <div class="absolute bottom-0 inset-x-0 bg-[#0c0d11] border-t border-[#23252b] px-4 pt-3 pb-6">
+            <div class="flex items-center gap-2 rounded-full bg-[#15161a] border border-[#26272d] pl-4 pr-1.5 py-1.5">
+              <i data-lucide="paperclip" class="w-[18px] h-[18px] text-[#6b7079]" style="stroke-width:1.5"></i>
+              <span class="flex-1 text-[13px] text-[#6b7079]">Reply from your phone…</span>
+              <button class="w-9 h-9 rounded-full bg-[#4f8cff] flex items-center justify-center"><i data-lucide="arrow-up" class="w-[18px] h-[18px] text-white" style="stroke-width:2"></i></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="text-center text-[12px] text-[#6b7079] mt-3">Conversation</div>
+    </div>
+
+    <!-- Relay -->
+    <div class="w-[372px] shrink-0">
+      <div class="rounded-[42px] bg-black p-2.5 shadow-2xl ring-1 ring-[#1c1d22]">
+        <div class="rounded-[34px] bg-[#0c0d11] overflow-hidden relative" style="height:760px">
+          <div class="flex items-center justify-between px-6 pt-3.5 pb-1 text-[12px] font-medium">
+            <span>9:41</span>
+            <div class="flex items-center gap-1.5"><i data-lucide="signal" class="w-3.5 h-3.5" style="stroke-width:1.5"></i><i data-lucide="wifi" class="w-3.5 h-3.5" style="stroke-width:1.5"></i><i data-lucide="battery-full" class="w-4 h-4" style="stroke-width:1.5"></i></div>
+          </div>
+          <div class="overflow-y-auto px-5 pb-10" style="height:712px">
+            <div class="flex items-center gap-3 pt-3 pb-4"><i data-lucide="chevron-left" class="w-5 h-5 text-[#b6bac2]" style="stroke-width:1.5"></i><div class="text-[22px] font-semibold tracking-tight leading-none">Model relay</div></div>
+            <div class="rounded-2xl bg-[#15161a] border border-[#26272d] p-4 mb-3.5 flex items-center justify-between">
+              <div><div class="text-[14px] font-semibold tracking-tight leading-none">Enabled</div><div class="text-[12px] text-[#8a8f98] mt-1">applies live to the desktop</div></div>
+              <div class="w-[46px] h-[27px] rounded-full bg-[#4f8cff] p-[3px] flex items-center justify-end"><div class="w-[21px] h-[21px] rounded-full bg-white shadow"></div></div>
+            </div>
+            <div class="text-[12px] font-medium text-[#8a8f98] uppercase mb-1.5 px-1" style="letter-spacing:0.04em">Upstream</div>
+            <div class="rounded-2xl bg-[#15161a] border border-[#26272d] divide-y divide-[#23252b] mb-4 overflow-hidden">
+              <div class="flex items-center justify-between px-4 py-3.5"><span class="text-[13px] text-[#8a8f98]">Base URL</span><span class="text-[13px] font-medium tracking-tight">api.deepseek.com/v1</span></div>
+              <div class="flex items-center justify-between px-4 py-3.5"><span class="text-[13px] text-[#8a8f98]">Protocol</span><span class="text-[12px] font-medium px-2 py-0.5 rounded-md bg-[#15233f] text-[#4f8cff]">Responses ⇄ chat</span></div>
+              <div class="flex items-center justify-between px-4 py-3.5"><span class="text-[13px] text-[#8a8f98]">API key</span><span class="text-[13px] font-medium tracking-tight tabular-nums">sk-a4d•••••</span></div>
+            </div>
+            <div class="flex items-center justify-between mb-1.5 px-1"><span class="text-[12px] font-medium text-[#8a8f98] uppercase" style="letter-spacing:0.04em">Model routing</span><i data-lucide="plus" class="w-4 h-4 text-[#4f8cff]" style="stroke-width:1.5"></i></div>
+            <div class="rounded-2xl bg-[#15161a] border border-[#26272d] p-3.5 mb-4 space-y-2.5">
+              <div class="flex items-center gap-2 text-[13px]"><span class="px-2 py-1 rounded-md bg-[#1c1d22] font-medium tracking-tight">gpt-*</span><i data-lucide="arrow-right" class="w-3.5 h-3.5 text-[#6b7079]" style="stroke-width:1.5"></i><span class="px-2 py-1 rounded-md bg-[#15233f] text-[#4f8cff] font-medium tracking-tight">deepseek-v4-flash</span></div>
+              <div class="flex items-center gap-2 text-[13px]"><span class="px-2 py-1 rounded-md bg-[#1c1d22] font-medium tracking-tight">“think step by step”</span><i data-lucide="arrow-right" class="w-3.5 h-3.5 text-[#6b7079]" style="stroke-width:1.5"></i><span class="px-2 py-1 rounded-md bg-[#15233f] text-[#4f8cff] font-medium tracking-tight">deepseek-reasoner</span></div>
+            </div>
+            <div class="text-[12px] font-medium text-[#8a8f98] uppercase mb-1.5 px-1" style="letter-spacing:0.04em">Daily budget</div>
+            <div class="rounded-2xl bg-[#15161a] border border-[#26272d] p-4 mb-4">
+              <div class="flex items-baseline justify-between mb-3"><span class="text-[20px] font-semibold tracking-tight">$5.00</span><span class="text-[12px] text-[#8a8f98]">block when exceeded</span></div>
+              <div class="relative h-1.5 rounded-full bg-[#23252b]"><div class="absolute left-0 top-0 h-1.5 rounded-full bg-[#4f8cff]" style="width:42%"></div><div class="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white border-2 border-[#4f8cff] shadow" style="left:calc(42% - 8px)"></div></div>
+            </div>
+            <div class="rounded-2xl bg-[#15161a] border border-[#26272d] p-4 flex items-center justify-between">
+              <div class="flex items-center gap-3"><div class="w-9 h-9 rounded-xl bg-[#3a1d1d] flex items-center justify-center"><i data-lucide="shield-check" class="w-[18px] h-[18px] text-[#f87171]" style="stroke-width:1.5"></i></div><div><div class="text-[14px] font-semibold tracking-tight leading-none">Guardrails</div><div class="text-[12px] text-[#8a8f98] mt-1">2 rules · redact PII, block markers</div></div></div>
+              <i data-lucide="chevron-right" class="w-5 h-5 text-[#6b7079]" style="stroke-width:1.5"></i>
+            </div>
+            <button class="w-full mt-5 h-12 rounded-2xl bg-white text-[#08090b] text-[14px] font-semibold tracking-tight hover:bg-[#e6e8ec] transition-colors">Apply to desktop</button>
+          </div>
+        </div>
+      </div>
+      <div class="text-center text-[12px] text-[#6b7079] mt-3">Relay</div>
+    </div>
+
+  </div>
+</div>
+
+<script>lucide.createIcons();</script>
+</body>
+</html>
