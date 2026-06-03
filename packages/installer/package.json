@@ -7,7 +7,7 @@
   "main": "dist/cli.js",
   "bin": {
     "desktop-proxy": "./dist/cli.js",
-    "dp": "./dist/cli.js"
+    "dprox": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",

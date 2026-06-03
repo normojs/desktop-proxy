@@ -33,7 +33,7 @@ import { pair } from "./commands/pair.js";
 function printHelp(): void {
   console.log(`
 desktop-proxy — Universal Electron App Injection Framework
-(short alias: dp — e.g. "dp install", "dp pair")
+(short alias: dprox — e.g. "dprox install", "dprox pair")
 
 Usage:
   desktop-proxy install [options]     Install injection framework on an Electron app
