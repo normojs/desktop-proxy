@@ -31,6 +31,24 @@ export function redactHeaders(headers?: Record<string, string>): Record<string, 
   return out;
 }
 
+/**
+ * Mask credentials in a config object before sending it to a REMOTE caller
+ * (phone/CLI over the bus): the relay upstream key and any remote NATS creds.
+ * Returns a deep copy; the original is untouched.
+ */
+export function redactConfigForRemote<T extends Record<string, unknown>>(config: T): T {
+  const out = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
+  const relay = out.relay as Record<string, unknown> | undefined;
+  if (relay && typeof relay.apiKey === "string" && relay.apiKey) relay.apiKey = maskToken(relay.apiKey);
+  const remote = out.remote as Record<string, unknown> | undefined;
+  if (remote) {
+    for (const k of ["seed", "pass", "jwt", "token"]) {
+      if (typeof remote[k] === "string" && remote[k]) remote[k] = "***redacted***";
+    }
+  }
+  return out as T;
+}
+
 export function redactSecretsInText(text: string | null | undefined): string | null | undefined {
   if (text == null || text === "") return text;
   return text

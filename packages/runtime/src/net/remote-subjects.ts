@@ -101,3 +101,27 @@ export function devicePermissions(instanceId: string): SubjectPermissions {
     subscribe: [`${ROOT}.${instanceId}.h2c.event.>`, "_INBOX.>"],
   };
 }
+
+// ── Remote RPC allowlist ──────────────────────────────────────────────────────
+
+/**
+ * Methods a REMOTE client (phone/CLI over NATS) may invoke. In-app (IPC) callers
+ * have full access; remote is limited to the inspector + control surface and never
+ * reaches `fs.*` / `cdp.*` / anything else on the bus.
+ */
+export const REMOTE_METHODS: ReadonlySet<string> = new Set([
+  "config.get",
+  "config.set",
+  "plugin.list",
+  "plugin.toggle",
+  "traffic.list",
+  "traffic.detail",
+  "traffic.replay",
+  "traffic.clear",
+  "traffic.export",
+  "relay.summary",
+]);
+
+export function isRemoteMethodAllowed(method: string): boolean {
+  return REMOTE_METHODS.has(method);
+}

@@ -21,7 +21,9 @@ import { createMainWorldHost, type MainWorldHost } from "./net/main-world";
 import { createTrafficRecorder, type TrafficRecorder } from "./net/traffic-recorder";
 import { createRendererInterceptRouter, type RendererInterceptRouter } from "./net/renderer-intercept";
 import { createTrafficWriter } from "./net/traffic-persist";
-import { redactEntry } from "./net/redact";
+import { redactEntry, redactConfigForRemote } from "./net/redact";
+import { buildRelaySummary } from "./net/relay-summary";
+import { isRemoteMethodAllowed } from "./net/remote-subjects";
 import { createPluginStorage } from "./storage";
 import { createBusRouter, type BusRouter } from "@desktop-proxy/plugin-sdk";
 import { createMainIpcTransport } from "./bus-ipc";
@@ -71,20 +73,6 @@ const pluginStorage = createPluginStorage(userRoot);
 // the hub (bridge: true); renderer routers are leaves.
 let _bus: BusRouter | null = null;
 
-// Methods a REMOTE client (phone/CLI over NATS) may invoke. In-app (IPC) callers
-// have full access; remote is limited to inspector + control, never fs/cdp/etc.
-const REMOTE_METHODS = new Set([
-  "config.get",
-  "config.set",
-  "plugin.list",
-  "plugin.toggle",
-  "traffic.list",
-  "traffic.detail",
-  "traffic.replay",
-  "traffic.clear",
-  "traffic.export",
-]);
-
 function getBus(): BusRouter {
   if (!_bus) {
     const electron = getElectron();
@@ -92,7 +80,7 @@ function getBus(): BusRouter {
       bridge: true,
       canReceive: (env, source) => {
         if (source !== "nats") return true; // in-app IPC: full access
-        if (env.kind === "req") return REMOTE_METHODS.has(env.method); // remote: allowlist only
+        if (env.kind === "req") return isRemoteMethodAllowed(env.method); // remote: allowlist only
         return true; // events/responses pass
       },
     });
@@ -497,6 +485,8 @@ function syncTrafficCapture(): void {
 // (tagged source "relay"), so out-of-process model traffic shows up everywhere.
 let _relay: import("./net/relay").RelayHandle | null = null;
 let _relayKey = ""; // signature of the applied config, to avoid needless restarts
+let _lastBudgetAlert = 0; // throttle budget:alert bus events
+let _lastRelayError = 0; // throttle relay:error bus events
 
 async function syncRelay(): Promise<void> {
   try {
@@ -541,8 +531,17 @@ async function syncRelay(): Promise<void> {
         beforeForward: () => {
           const v = budget.check();
           if (!v.over) return undefined;
+          const blocked = readConfig().relay?.budget?.action === "block";
+          if (Date.now() - _lastBudgetAlert > 60000) {
+            _lastBudgetAlert = Date.now();
+            try {
+              getBus().publish("budget:alert", { scope: v.scope, spent: v.spent, limit: v.limit, blocked });
+            } catch {
+              /* bus may be down */
+            }
+          }
           const msg = `relay budget exceeded: ${v.scope} $${v.spent.toFixed(4)} ≥ $${v.limit}`;
-          if (readConfig().relay?.budget?.action === "block") return { block: true, status: 402, message: msg };
+          if (blocked) return { block: true, status: 402, message: msg };
           log("warn", msg);
           return undefined;
         },
@@ -570,6 +569,14 @@ async function syncRelay(): Promise<void> {
           reqModel.delete(resp.requestId);
           const usage = extractUsage(model, resp.body);
           if (usage?.costUsd) budget.record(usage.costUsd);
+          if (resp.status >= 500 && Date.now() - _lastRelayError > 30000) {
+            _lastRelayError = Date.now();
+            try {
+              getBus().publish("relay:error", { status: resp.status, model: model ?? null });
+            } catch {
+              /* bus may be down */
+            }
+          }
           net.observeResponse({
             id: `resp-${resp.requestId}`,
             requestId: resp.requestId,
@@ -999,11 +1006,33 @@ function setupIPCBridge(): void {
   // Converged RPC methods — single source of truth on the bus. The legacy IPC
   // handlers below delegate here, and remote clients (CLI/phone over NATS) get
   // the same methods for free.
-  bus.handle("config.get", () => ({ ...readConfig(), version: FRAMEWORK_VERSION }));
-  bus.handle("config.set", (p) => {
-    const cfg = { ...readConfig(), ...((p as Record<string, unknown>) ?? {}) } as Config;
+  bus.handle("config.get", (_p, ctx) => {
+    const cfg = { ...readConfig(), version: FRAMEWORK_VERSION };
+    // Remote callers (phone/CLI) never receive raw credentials.
+    return ctx.source === "nats" ? redactConfigForRemote(cfg) : cfg;
+  });
+  bus.handle("config.set", (p, ctx) => {
+    const patch = (p as Record<string, unknown>) ?? {};
+    // A remote caller must not overwrite a real secret with the masked placeholder
+    // it received from config.get; drop masked credential fields.
+    if (ctx.source === "nats") {
+      const relay = patch.relay as Record<string, unknown> | undefined;
+      if (relay && typeof relay.apiKey === "string" && relay.apiKey.includes("***")) delete relay.apiKey;
+    }
+    const cfg = { ...readConfig(), ...patch } as Config;
     writeConfig(cfg);
     return { ok: true };
+  });
+  bus.handle("relay.summary", () => {
+    const cfg = readConfig();
+    const port = cfg.relay?.port ?? 8788;
+    let budgetState: import("./net/budget").BudgetState | undefined;
+    try {
+      budgetState = JSON.parse(fs.readFileSync(path.join(LOG_DIR, `relay-${port}-budget.json`), "utf8"));
+    } catch {
+      /* none yet */
+    }
+    return buildRelaySummary(cfg.relay, budgetState);
   });
   bus.handle("plugin.list", () => {
     discoverPlugins();
