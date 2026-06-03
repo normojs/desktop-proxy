@@ -19,6 +19,7 @@ import { analyzeEntry } from "./net/traffic-analyze.js";
 import { extractUsage } from "./net/traffic-cost.js";
 import { redactEntry } from "./net/redact.js";
 import type { RelayTransforms } from "./net/transform.js";
+import type { RouteRule } from "./net/route.js";
 import { startRelayUi, type UiEntry } from "./net/relay-ui.js";
 
 const USER_ROOT = join(homedir(), ".desktop-proxy");
@@ -34,6 +35,7 @@ interface RelayCfg {
   fallbackModels?: string[];
   upstreamApi?: "responses" | "chat";
   transforms?: RelayTransforms;
+  routes?: RouteRule[];
   /** Local dashboard port (default relay port + 1; set 0 to disable). */
   uiPort?: number;
 }
@@ -81,6 +83,7 @@ async function main(): Promise<void> {
     fallbackModels: r.fallbackModels,
     upstreamApi: r.upstreamApi,
     transforms: r.transforms,
+    routes: r.routes,
     maxBodyBytes,
   };
 

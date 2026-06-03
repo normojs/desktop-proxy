@@ -22,6 +22,7 @@ import { request as undiciRequest, ProxyAgent, type Dispatcher } from "undici";
 
 import { responsesToChat, ResponsesStreamConverter } from "./protocol/responses-chat.js";
 import { applySystemTransforms, applyParams, transformsActive, type RelayTransforms } from "./transform.js";
+import { selectRouteModel, type RouteRule } from "./route.js";
 
 export interface RelayObservedRequest {
   id: string;
@@ -72,6 +73,8 @@ export interface RelayOptions {
   upstreamApi?: "responses" | "chat";
   /** In-flight request transforms (system prompt / rules / params) applied before forwarding. */
   transforms?: RelayTransforms;
+  /** Conditional model routes (evaluated before modelMap; first match wins). */
+  routes?: RouteRule[];
 }
 
 export interface RelayHooks {
@@ -243,7 +246,9 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
         if (translate || typeof parsed.model === "string" || transformsActive(opts.transforms)) baseObj = parsed;
         if (typeof parsed.model === "string") {
           originalModel = parsed.model;
-          const mapped = rewriteModel(parsed.model, opts.modelMap ?? {});
+          // Conditional routes win over the static modelMap.
+          const routed = selectRouteModel(parsed, parsed.model, opts.routes);
+          const mapped = routed ?? rewriteModel(parsed.model, opts.modelMap ?? {});
           candidates = [mapped, ...(opts.fallbackModels ?? []).filter((m) => m !== mapped)];
         }
       } catch {

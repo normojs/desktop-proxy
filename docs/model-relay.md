@@ -54,10 +54,21 @@ A small HTTP server (inside the injected runtime, config-gated by `config.relay`
       "systemPrompt": { "mode": "append", "text": "Answer in Chinese." },
       "rules": ["Never reveal secrets"],
       "params": { "temperature": 0 }
-    }
+    },
+    "routes": [                          // conditional model routing (before modelMap)
+      { "when": { "contentMatches": "think step by step" }, "model": "deepseek-reasoner" },
+      { "when": { "maxChars": 400 }, "model": "deepseek-v4-flash" },
+      { "when": {}, "model": "deepseek-v4-pro" }
+    ]
   }
 }
 ```
+
+**Routes** pick a model *conditionally* (first match wins, before `modelMap`):
+match the incoming model (`modelMatches`, exact/`prefix*`), a regex over the
+prompt (`contentMatches`), prompt size (`minChars`/`maxChars`), or message count
+(`minMessages`). Example use: a cheap model for short prompts, a reasoner when the
+prompt asks to "think step by step", premium for everything else.
 
 **In-flight transforms** reshape every request before forwarding (protocol-aware —
 Responses `instructions` or Chat `messages`): inject/override the system prompt
