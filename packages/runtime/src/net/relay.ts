@@ -20,6 +20,8 @@
 import http from "node:http";
 import { request as undiciRequest, ProxyAgent, type Dispatcher } from "undici";
 
+import { responsesToChat, ResponsesStreamConverter } from "./protocol/responses-chat.js";
+
 export interface RelayObservedRequest {
   id: string;
   method: string;
@@ -61,6 +63,12 @@ export interface RelayOptions {
   fallbackModels?: string[];
   /** Status codes that trigger failover to the next fallback model. */
   retryStatuses?: number[];
+  /**
+   * Upstream wire protocol. "chat" makes the relay translate Codex's Responses
+   * API (`/v1/responses`) to/from Chat Completions (`/v1/chat/completions`) so
+   * chat-only backends (DeepSeek, most relays) work. Default "responses" (passthrough).
+   */
+  upstreamApi?: "responses" | "chat";
 }
 
 export interface RelayHooks {
@@ -194,8 +202,13 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
 
   async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const id = newId();
-    const target = joinUpstream(opts.upstream, req.url ?? "/");
     const method = (req.method ?? "GET").toUpperCase();
+    // Translate Codex's Responses API to chat/completions when the upstream is
+    // chat-only; the forward path becomes /v1/chat/completions.
+    const translate = opts.upstreamApi === "chat" && /\/responses(\?|$)/.test(req.url ?? "");
+    const target = translate
+      ? joinUpstream(opts.upstream, "/v1/chat/completions")
+      : joinUpstream(opts.upstream, req.url ?? "/");
 
     // Buffer the (small) request body.
     const reqChunks: Buffer[] = [];
@@ -217,15 +230,16 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
     let candidates: string[] = [];
     if (!isBodyless && reqBuf.length > 0 && /json/i.test(incoming["content-type"] ?? "")) {
       try {
-        const parsed = JSON.parse(reqBuf.toString("utf8")) as Record<string, unknown>;
+        const parsedRaw = JSON.parse(reqBuf.toString("utf8")) as Record<string, unknown>;
+        const parsed = translate ? (responsesToChat(parsedRaw) as Record<string, unknown>) : parsedRaw;
+        if (translate || typeof parsed.model === "string") baseObj = parsed;
         if (typeof parsed.model === "string") {
-          baseObj = parsed;
           originalModel = parsed.model;
           const mapped = rewriteModel(parsed.model, opts.modelMap ?? {});
           candidates = [mapped, ...(opts.fallbackModels ?? []).filter((m) => m !== mapped)];
         }
       } catch {
-        /* not a JSON body we can rewrite — forward verbatim */
+        /* not a JSON body we can translate/rewrite — forward verbatim */
       }
     }
 
@@ -233,7 +247,7 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
     const attempts: (string | null)[] = candidates.length > 0 ? candidates : [null];
 
     let upstream: Dispatcher.ResponseData | null = null;
-    let sentBody = reqBuf;
+    let sentBody = translate && baseObj ? Buffer.from(JSON.stringify(baseObj)) : reqBuf;
     let sentModel = originalModel;
 
     for (let i = 0; i < attempts.length; i++) {
@@ -284,6 +298,40 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
 
     const resHeaders = flattenUndici(upstream.headers as Record<string, string | string[] | undefined>);
     res.writeHead(upstream.statusCode, filterResponseHeaders(resHeaders));
+
+    // Translate mode: convert the chat/completions SSE into the Responses event
+    // stream Codex expects, teeing the converted (Responses) bytes for the recorder.
+    if (translate && /event-stream/i.test(resHeaders["content-type"] ?? "")) {
+      const conv = new ResponsesStreamConverter();
+      const recT: Buffer[] = [];
+      let recN = 0;
+      const emit = (s: string): void => {
+        if (!s) return;
+        res.write(s);
+        if (cap <= 0 || recN < cap) {
+          const b = Buffer.from(s, "utf8");
+          recT.push(recN + b.length > cap && cap > 0 ? b.subarray(0, cap - recN) : b);
+          recN += b.length;
+        }
+      };
+      upstream.body.on("data", (chunk: Buffer) => emit(conv.push(Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk))));
+      upstream.body.on("end", () => {
+        emit(conv.finish());
+        res.end();
+        hooks.onResponse?.({
+          requestId: id,
+          status: upstream!.statusCode,
+          statusText: "",
+          headers: resHeaders,
+          body: decodeBody(Buffer.concat(recT)).body,
+        });
+      });
+      upstream.body.on("error", (e) => {
+        hooks.log("warn", `relay: upstream stream error: ${String(e)}`);
+        if (!res.writableEnded) res.destroy();
+      });
+      return;
+    }
 
     // Stream the body to the client while teeing a capped copy for the recorder.
     const recChunks: Buffer[] = [];

@@ -34,6 +34,7 @@ interface RelayCfg {
   apiKey?: string;
   modelMap?: Record<string, string>;
   fallbackModels?: string[];
+  upstreamApi?: "responses" | "chat";
 }
 interface Config {
   relay?: RelayCfg;
@@ -68,8 +69,10 @@ export interface RelayOptions {
   json?: boolean;
   /** Skip writing ~/.codex/auth.json (keep the real ChatGPT login). */
   noAuth?: boolean;
-  /** Codex provider wire_api: "responses" (default) or "chat" (for DeepSeek etc.). */
+  /** Codex provider wire_api: "responses" (default) or "chat". */
   wireApi?: string;
+  /** Relay upstream protocol: "chat" translates Responses↔chat for chat-only backends. */
+  upstreamApi?: "responses" | "chat";
   /** model rewrite map (exact or `prefix*`). */
   modelMap?: Record<string, string>;
   /** ordered fallback models if the request errors. */
@@ -124,6 +127,7 @@ function relayOn(opts: RelayOptions): void {
     apiKey: opts.key ?? cfg.relay?.apiKey,
     modelMap: opts.modelMap ?? cfg.relay?.modelMap,
     fallbackModels: opts.fallbackModels ?? cfg.relay?.fallbackModels,
+    upstreamApi: opts.upstreamApi ?? cfg.relay?.upstreamApi,
   };
   writeConfig(cfg);
 
@@ -149,6 +153,7 @@ function relayOn(opts: RelayOptions): void {
   console.log(`    Listen:   ${localBase}`);
   console.log(`    Upstream: ${upstream}`);
   if (cfg.relay.proxy) console.log(`    Proxy:    ${cfg.relay.proxy}`);
+  if (cfg.relay.upstreamApi) console.log(`    Upstream API: ${cfg.relay.upstreamApi}${cfg.relay.upstreamApi === "chat" ? " (Responses↔chat translation)" : ""}`);
   if (cfg.relay.modelMap && Object.keys(cfg.relay.modelMap).length) {
     console.log(`    Model map: ${Object.entries(cfg.relay.modelMap).map(([k, v]) => `${k}→${v}`).join(", ")}`);
   }
@@ -211,6 +216,7 @@ function relayStatus(opts: RelayOptions): void {
   console.log(`  Listen:   http://127.0.0.1:${r.port ?? DEFAULT_PORT}/v1`);
   console.log(`  Upstream: ${r.upstream ?? "(unset)"}`);
   console.log(`  Proxy:    ${r.proxy ?? "(none)"}`);
+  console.log(`  Upstream API: ${r.upstreamApi ?? "responses"}`);
   if (r.modelMap && Object.keys(r.modelMap).length) {
     console.log(`  Model map: ${Object.entries(r.modelMap).map(([k, v]) => `${k}→${v}`).join(", ")}`);
   }

@@ -230,6 +230,8 @@ interface Config {
     modelMap?: Record<string, string>;
     /** Retry with these models (in order) if the request errors. */
     fallbackModels?: string[];
+    /** "chat" → translate Codex Responses API ↔ chat/completions for chat-only backends. */
+    upstreamApi?: "responses" | "chat";
   };
   /** Stable id for this install, used in NATS subjects (auto-generated). */
   instanceId?: string;
@@ -489,7 +491,7 @@ async function syncRelay(): Promise<void> {
     const r = cfg.relay;
     const want = r?.enabled === true && typeof r.upstream === "string" && r.upstream.length > 0;
     const key = want
-      ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0, m: r!.modelMap ?? {}, f: r!.fallbackModels ?? [] })
+      ? JSON.stringify({ p: r!.port ?? 8788, u: r!.upstream, x: r!.proxy ?? "", k: r!.apiKey ? 1 : 0, m: r!.modelMap ?? {}, f: r!.fallbackModels ?? [], a: r!.upstreamApi ?? "" })
       : "";
     if (key === _relayKey) return; // unchanged
 
@@ -510,6 +512,7 @@ async function syncRelay(): Promise<void> {
         apiKey: r!.apiKey,
         modelMap: r!.modelMap,
         fallbackModels: r!.fallbackModels,
+        upstreamApi: r!.upstreamApi,
         maxBodyBytes: readConfig().maxResponseBodyBytes ?? 1024 * 1024,
       },
       {
