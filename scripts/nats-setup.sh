@@ -35,7 +35,19 @@ say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 CURL_OPTS=(-fL --retry 3 --retry-delay 2 --connect-timeout 20)
 [ -n "$PROXY" ] && CURL_OPTS+=(--proxy "$PROXY")
 ghurl() { case "$1" in https://github.com/*|https://raw.githubusercontent.com/*) echo "${GH_MIRROR}$1";; *) echo "$1";; esac; }
-dl() { local u; u="$(ghurl "$1")"; say "Downloading $u"; curl "${CURL_OPTS[@]}" --progress-bar -o "$2" "$u"; }
+DEFAULT_MIRRORS=("https://ghfast.top/" "https://ghproxy.net/" "https://gh-proxy.com/")
+dl() { # dl <url> <out>; tries direct (or GH_MIRROR), then auto-falls back to mirrors for github URLs
+  local raw="$1" out="$2"
+  say "Downloading $(ghurl "$raw")"
+  curl "${CURL_OPTS[@]}" --progress-bar -o "$out" "$(ghurl "$raw")" && return 0
+  if [ -z "$GH_MIRROR" ]; then case "$raw" in https://github.com/*|https://raw.githubusercontent.com/*)
+    for m in "${DEFAULT_MIRRORS[@]}"; do
+      say "Direct download failed — retry via mirror ${m}"
+      curl "${CURL_OPTS[@]}" --progress-bar -o "$out" "${m}${raw}" && return 0
+    done;; esac
+  fi
+  return 1
+}
 
 say "desktop-proxy NATS one-click setup (TLS=$TLS, PM=$PM, host=$HOST_ADDR${PROXY:+, proxy=$PROXY}${GH_MIRROR:+, mirror=$GH_MIRROR})"
 
