@@ -145,7 +145,9 @@ pnpm clean       # remove dist/ in every package
 
 ## CLI Usage
 
-After building, the CLI entry point is `packages/installer/dist/cli.js`.
+After building, the CLI entry point is `packages/installer/dist/cli.js`. When the
+installer package is installed (`npm i -g`), it exposes two binaries: the full
+name `desktop-proxy` and the short alias **`dp`** (e.g. `dp install`, `dp pair`).
 
 ```bash
 node packages/installer/dist/cli.js <command> [options]
