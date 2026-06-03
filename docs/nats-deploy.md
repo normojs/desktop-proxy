@@ -50,16 +50,20 @@ sudo GH_MIRROR=https://ghproxy.com/ DOMAIN=nats.your-domain.com TLS=letsencrypt 
 
 NATS 用 `4222`/`8443`,与 nginx 的 `80`/`443` **不冲突**,可直接共存(放行 4222/8443 即可),**NATS 本身不需要 nginx 配置**。唯一注意:**别用 `certbot --standalone`**(会抢 80 端口)。两步:
 
-1) 用你**现有的 nginx** 给该子域签证(不抢 80、不停机)。先加一个最小 vhost:
+1) 用你**现有的 nginx** 给该子域签证(免费 Let's Encrypt,**只要 `certbot`,不用 `-nginx` 插件**;不抢 80、不停机)。先加一个只用于签证的最小 vhost:
 ```nginx
 # /etc/nginx/conf.d/nats.conf
-server { listen 80; server_name nats.dprox.mbu.ltd; root /var/www/html; }
+server {
+  listen 80; server_name nats.dprox.mbu.ltd; root /var/www/html;
+  location /.well-known/acme-challenge/ { allow all; }
+}
 ```
 ```bash
+sudo mkdir -p /var/www/html
 sudo nginx -t && sudo systemctl reload nginx
-sudo apt-get install -y python3-certbot-nginx
-sudo certbot --nginx -d nats.dprox.mbu.ltd          # 或:certbot certonly --webroot -w /var/www/html -d nats.dprox.mbu.ltd
+sudo certbot certonly --webroot -w /var/www/html -d nats.dprox.mbu.ltd --non-interactive --agree-tos -m admin@dprox.mbu.ltd
 ```
+> 已有覆盖该域名的证书(如泛域名)就跳过本步,直接在第 2 步 `CERT_FILE/KEY_FILE` 指过去。
 
 2) 跑脚本,用 **`TLS=existing`** 指向刚拿到的证书(NATS 自己在 4222/8443 上用它,绕开 nginx):
 ```bash
