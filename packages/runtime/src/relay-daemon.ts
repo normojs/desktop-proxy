@@ -70,14 +70,17 @@ async function main(): Promise<void> {
   }
 
   mkdirSync(LOG_DIR, { recursive: true });
-  const writer = createTrafficWriter(join(LOG_DIR, "relay-daemon.ndjson"));
+  const relayPort = r.port ?? 8788;
+  // Per-port filenames so a daemon and an injected app (or two relays) on
+  // different ports never clobber each other's capture/budget files.
+  const writer = createTrafficWriter(join(LOG_DIR, `relay-${relayPort}.ndjson`));
   const log = (level: string, ...args: unknown[]) => console.log(`[${ts()}] [${level}] relay:`, ...args);
 
   const pending = new Map<string, { method: string; url: string; headers: Record<string, string>; body: string | null }>();
   // In-memory ring buffer powering the local dashboard.
   const recent: UiEntry[] = [];
   const RECENT_MAX = 1000;
-  const budget = createBudgetTracker(join(LOG_DIR, "relay-budget.json"), () => r.budget);
+  const budget = createBudgetTracker(join(LOG_DIR, `relay-${relayPort}-budget.json`), () => r.budget);
 
   const opts: RelayOptions = {
     port: r.port ?? 8788,
@@ -151,7 +154,7 @@ async function main(): Promise<void> {
   });
 
   log("info", `daemon listening on http://127.0.0.1:${handle.port} → ${r.upstream}${r.upstreamApi === "chat" ? " (Responses↔chat)" : ""}`);
-  log("info", `recording to ${join(LOG_DIR, "relay-daemon.ndjson")} — Ctrl-C to stop.`);
+  log("info", `recording to ${join(LOG_DIR, `relay-${relayPort}.ndjson`)} — Ctrl-C to stop.`);
 
   // Local dashboard (no-injection visibility). uiPort 0 disables it.
   const uiPort = r.uiPort ?? handle.port + 1;
@@ -177,6 +180,13 @@ async function main(): Promise<void> {
 }
 
 void main().catch((e) => {
-  console.error("relay daemon failed:", e);
+  if ((e as NodeJS.ErrnoException)?.code === "EADDRINUSE") {
+    console.error(
+      `relay daemon: ${String((e as Error).message || e)}\n` +
+        `Another relay is already running. Stop it, or set a different config.relay.port.`,
+    );
+  } else {
+    console.error("relay daemon failed:", e);
+  }
   process.exit(1);
 });

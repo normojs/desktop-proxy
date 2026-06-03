@@ -519,7 +519,8 @@ async function syncRelay(): Promise<void> {
     const { createBudgetTracker } = await import("./net/budget.js");
     const { extractUsage } = await import("./net/traffic-cost.js");
     const net = getMainNetwork();
-    const budget = createBudgetTracker(path.join(LOG_DIR, "relay-budget.json"), () => readConfig().relay?.budget);
+    const relayPort = r!.port ?? 8788;
+    const budget = createBudgetTracker(path.join(LOG_DIR, `relay-${relayPort}-budget.json`), () => readConfig().relay?.budget);
     const reqModel = new Map<string, string>();
     _relay = await startRelay(
       {
@@ -583,7 +584,15 @@ async function syncRelay(): Promise<void> {
       },
     );
   } catch (e) {
-    log("warn", "relay sync failed:", String(e));
+    if ((e as NodeJS.ErrnoException)?.code === "EADDRINUSE") {
+      log(
+        "warn",
+        `relay: port ${readConfig().relay?.port ?? 8788} already in use (another injected app or "dprox relay daemon"?). ` +
+          `Relay not started — set a different config.relay.port to run more than one at once.`,
+      );
+    } else {
+      log("warn", "relay sync failed:", String(e));
+    }
     _relayKey = ""; // allow a retry on the next config change
   }
 }

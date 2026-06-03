@@ -175,6 +175,18 @@ a browser terminal emulator) against DeepSeek with **zero protocol errors**.
 detection — not needed in practice, since Codex edits via the standard
 `exec_command` tool.
 
+## Multiple instances
+
+Multiple **windows** of one IDE share a single Electron main process, so there's
+exactly one relay/dashboard/recorder and no conflict. Running multiple **processes**
+that each want a relay — two different injected apps, or the standalone daemon
+alongside an injected app — is the case to mind:
+
+- They share the listen **port** (default `8788`); the second to start gets a clear
+  `EADDRINUSE` error. Give each a distinct `config.relay.port` to run in parallel.
+- Capture and budget files are **per-port** (`log/relay-<port>.ndjson`,
+  `log/relay-<port>-budget.json`), so parallel relays don't clobber each other.
+
 ## Limitations
 
 - The protocol translator is Phase 1+2a; very tool-heavy Codex flows that rely on

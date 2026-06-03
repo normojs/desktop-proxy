@@ -407,7 +407,18 @@ export function startRelay(opts: RelayOptions, hooks: RelayHooks): Promise<Relay
   }
 
   return new Promise<RelayHandle>((resolve, reject) => {
-    server.once("error", reject);
+    server.once("error", (err: NodeJS.ErrnoException) => {
+      if (err?.code === "EADDRINUSE") {
+        const e = new Error(
+          `relay port ${opts.port} is already in use — another relay or injected app is using it. ` +
+            `Set a different config.relay.port, or stop the other (quit the app / "dprox relay service uninstall").`,
+        ) as NodeJS.ErrnoException;
+        e.code = "EADDRINUSE";
+        reject(e);
+      } else {
+        reject(err);
+      }
+    });
     server.listen(opts.port, "127.0.0.1", () => {
       server.removeListener("error", reject);
       const addr = server.address();
