@@ -39,6 +39,8 @@ sudo GH_MIRROR=https://ghproxy.com/ DOMAIN=nats.your-domain.com TLS=letsencrypt 
 ```
 连脚本本身也可经镜像下载:`curl -fsSL https://ghproxy.com/https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh -o nats-setup.sh`。
 
+**依赖自动安装**:脚本自动识别包管理器(`apt`/`dnf`/`yum`/`zypper`/`pacman`/`apk`)并装好所需命令(`curl`/`tar`/`unzip`/`jq`,自签时 `openssl`,letsencrypt 时 `certbot`)。RHEL/CentOS 上 `certbot` 可能需先 `sudo dnf install -y epel-release`(用 `TLS=existing` 则不需要 certbot)。防火墙自动适配 `ufw`/`firewalld`(云服务器记得在**安全组**也放行 4222/8443)。
+
 **重复执行安全(重装)**:脚本**幂等**——已装的 nats-server 默认跳过(`FORCE_INSTALL=1` 才重装);已存在的 operator/APP 账号**复用、不重建**(密钥不变,已配对的桌面/手机继续有效);证书 `--keep-until-expiring` 复用;systemd/pm2/docker 直接重启替换。下载带进度条与重试。
 - Let's Encrypt 需:**域名 A 记录指向本机** + **80 端口可达**(脚本会放行 ufw 80)。
 

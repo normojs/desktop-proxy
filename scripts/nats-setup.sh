@@ -49,23 +49,54 @@ dl() { # dl <url> <out>; tries direct (or GH_MIRROR), then auto-falls back to mi
   return 1
 }
 
-say "desktop-proxy NATS one-click setup (TLS=$TLS, PM=$PM, host=$HOST_ADDR${PROXY:+, proxy=$PROXY}${GH_MIRROR:+, mirror=$GH_MIRROR})"
+# ── package manager (apt/dnf/yum/zypper/pacman/apk) + dependency installer ────
+PM_INSTALL=""; APT_UPDATED=0
+if   need apt-get; then PM_INSTALL="apt-get install -y"
+elif need dnf;     then PM_INSTALL="dnf install -y"
+elif need yum;     then PM_INSTALL="yum install -y"
+elif need zypper;  then PM_INSTALL="zypper install -y"
+elif need pacman;  then PM_INSTALL="pacman -S --noconfirm"
+elif need apk;     then PM_INSTALL="apk add --no-cache"
+fi
+pkg_install() {
+  [ -n "$PM_INSTALL" ] || { echo "!! No supported package manager. Please install manually: $*"; return 1; }
+  if [ "${PM_INSTALL%% *}" = "apt-get" ] && [ "$APT_UPDATED" = "0" ]; then $SUDO apt-get update -y >/dev/null 2>&1 || true; APT_UPDATED=1; fi
+  $SUDO $PM_INSTALL "$@"
+}
+ensure() { # ensure <command> [package]
+  local cmd="$1" pkg="${2:-$1}"
+  need "$cmd" && return 0
+  say "Installing dependency: $pkg"
+  pkg_install "$pkg" || { echo "!! Could not auto-install '$pkg'. Install it and re-run."; exit 1; }
+  need "$cmd" || { echo "!! '$cmd' still missing after install."; exit 1; }
+}
 
-# ── 1. install nats-server, nsc, jq ──────────────────────────────────────────
+say "desktop-proxy NATS one-click setup (TLS=$TLS, PM=$PM, host=$HOST_ADDR${PROXY:+, proxy=$PROXY}${GH_MIRROR:+, mirror=$GH_MIRROR})"
+if [ -n "$PM_INSTALL" ]; then say "Package manager: ${PM_INSTALL%% *}"; else say "No package manager detected — ensure curl/tar/unzip/jq/openssl are preinstalled"; fi
+
+# ── 1. dependencies + nats-server + nsc ──────────────────────────────────────
+ensure curl; ensure tar
 if ! need nats-server || [ "$FORCE_INSTALL" = "1" ]; then
   say "Installing nats-server $VER"
   TMP="$(mktemp -d)"
-  dl "https://github.com/nats-io/nats-server/releases/download/${VER}/nats-server-${VER}-linux-$(arch).tar.gz" "$TMP/n.tgz"
+  dl "https://github.com/nats-io/nats-server/releases/download/${VER}/nats-server-${VER}-linux-$(arch).tar.gz" "$TMP/n.tgz" \
+    || { echo "!! nats-server download failed — retry with PROXY=http://host:port or GH_MIRROR=https://ghfast.top/"; exit 1; }
   tar -xzf "$TMP/n.tgz" -C "$TMP"; $SUDO install "$TMP"/nats-server-*/nats-server /usr/local/bin/nats-server; rm -rf "$TMP"
 else
-  say "nats-server already installed ($(nats-server --version 2>/dev/null)) — skipping (FORCE_INSTALL=1 to reinstall)"
+  say "nats-server present ($(nats-server --version 2>/dev/null)); FORCE_INSTALL=1 to reinstall"
 fi
-if [ "$SKIP_NSC" != "1" ] && { ! need nsc || [ "$FORCE_INSTALL" = "1" ]; }; then
-  need unzip || $SUDO apt-get install -y unzip >/dev/null 2>&1 || true
-  dl "https://github.com/nats-io/nsc/releases/latest/download/nsc-linux-$(arch).zip" /tmp/nsc.zip
-  $SUDO unzip -o /tmp/nsc.zip -d /usr/local/bin >/dev/null
+need nats-server || { echo "!! nats-server not installed"; exit 1; }
+
+if [ "$SKIP_NSC" != "1" ]; then
+  ensure jq; ensure unzip
+  if ! need nsc || [ "$FORCE_INSTALL" = "1" ]; then
+    say "Installing nsc"
+    dl "https://github.com/nats-io/nsc/releases/latest/download/nsc-linux-$(arch).zip" /tmp/nsc.zip \
+      || { echo "!! nsc download failed — retry with PROXY=... or GH_MIRROR=https://ghfast.top/"; exit 1; }
+    $SUDO unzip -o /tmp/nsc.zip -d /usr/local/bin >/dev/null
+  fi
+  need nsc || { echo "!! nsc not installed (unzip ok? path /usr/local/bin writable?)"; exit 1; }
 fi
-need jq || $SUDO apt-get install -y jq >/dev/null 2>&1 || true
 
 $SUDO mkdir -p "$NATS_DIR/tls" "$NATS_DIR/jwt"
 
@@ -83,11 +114,12 @@ elif [ "$TLS" = "letsencrypt" ]; then
   say "Obtaining cert for $DOMAIN — needs DNS A record → this server and port 80 reachable"
   say "NOTE: --standalone needs port 80 FREE. If nginx/web uses 80, stop it briefly or use TLS=existing instead."
   need ufw && { $SUDO ufw allow 80/tcp >/dev/null 2>&1 || true; }
-  need certbot || $SUDO apt-get install -y certbot
+  ensure certbot   # on RHEL/CentOS this may need EPEL: sudo dnf install -y epel-release
   # --keep-until-expiring makes re-runs reuse the existing cert (no rate-limit hit).
   $SUDO certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos -m "admin@$DOMAIN" --keep-until-expiring
   CERT="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"; KEY="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
 else
+  ensure openssl
   say "Generating self-signed cert for $HOST_ADDR"
   SAN=$([ -n "$DOMAIN" ] && echo "DNS:$DOMAIN" || echo "IP:$HOST_ADDR")
   $SUDO openssl req -x509 -newkey rsa:2048 -nodes -keyout "$KEY" -out "$CERT" -days 825 \
@@ -152,8 +184,17 @@ start_docker() {
 say "Starting nats-server via $PM (boot autostart)"
 case "$PM" in systemd) start_systemd;; pm2) start_pm2;; docker) start_docker;; *) echo "bad PM=$PM"; exit 1;; esac
 
-# ── 6. firewall ──────────────────────────────────────────────────────────────
-if need ufw; then $SUDO ufw allow "$PORT/tcp" >/dev/null 2>&1 || true; $SUDO ufw allow "$WS_PORT/tcp" >/dev/null 2>&1 || true; fi
+# ── 6. firewall (ufw or firewalld) ───────────────────────────────────────────
+if need ufw; then
+  $SUDO ufw allow "$PORT/tcp" >/dev/null 2>&1 || true
+  $SUDO ufw allow "$WS_PORT/tcp" >/dev/null 2>&1 || true
+elif need firewall-cmd; then
+  $SUDO firewall-cmd --permanent --add-port="$PORT/tcp" >/dev/null 2>&1 || true
+  $SUDO firewall-cmd --permanent --add-port="$WS_PORT/tcp" >/dev/null 2>&1 || true
+  $SUDO firewall-cmd --reload >/dev/null 2>&1 || true
+else
+  say "No ufw/firewalld detected — make sure ports $PORT and $WS_PORT are open (also in your cloud security group)."
+fi
 
 # ── 7. push accounts + extract desktop credentials ───────────────────────────
 if [ "$SKIP_NSC" != "1" ]; then
