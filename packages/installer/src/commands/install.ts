@@ -16,14 +16,8 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { locateApp } from "../platform.js";
-import {
-  signAppBundle,
-  signAppBundleWithEntitlements,
-  clearQuarantine,
-  DEFAULT_SIGNING_IDENTITY,
-} from "../codesign.js";
-import { buildEntitlementsPlist } from "../macos-inject.js";
 import { permissions } from "./permissions.js";
+import { postInject } from "../os/post-inject.js";
 import { getBackend, DEFAULT_BACKEND, type BackendName, type BackendContext } from "../backends/index.js";
 
 export interface InstallOptions {
@@ -129,25 +123,14 @@ export async function install(opts: InstallOptions = {}): Promise<void> {
   const ctx: BackendContext = { install: codex, userRoot, runtimeDir, backupDir, log, noFuse: opts.noFuse };
   const result = await backend.apply(ctx);
 
-  // ── Re-sign on macOS (shared; entitlements from the backend) ──────────────
-  let resigned = false;
-  if (opts.noResign !== true && codex.platform === "darwin") {
-    clearQuarantine(codex.appRoot);
-    // Under sudo the invoking user's login keychain isn't reachable (root's is
-    // used), so creating/using a local signing identity is unreliable. Sign
-    // ad-hoc in that case — the app still launches locally; TCC perms reset on
-    // each re-sign (re-grant once via `dprox permissions`).
-    const useLocalIdentity = !sudoer;
-    if (result.entitlements.length > 0) {
-      const entitlementsPath = join(userRoot, "inject.entitlements");
-      writeFileSync(entitlementsPath, buildEntitlementsPlist(result.entitlements));
-      signAppBundleWithEntitlements(codex.appRoot, entitlementsPath, { identityName: DEFAULT_SIGNING_IDENTITY, useLocalIdentity });
-    } else {
-      signAppBundle(codex.appRoot, { identityName: DEFAULT_SIGNING_IDENTITY, useLocalIdentity });
-    }
-    resigned = true;
-    log(useLocalIdentity ? "Re-signed app bundle with local identity" : "Re-signed app bundle (ad-hoc)");
-  }
+  // ── OS-specific finishing step (macOS re-sign; no-op on Windows/Linux) ─────
+  const { resigned } = postInject(codex, {
+    userRoot,
+    entitlements: result.entitlements,
+    sudo: !!sudoer,
+    noResign: opts.noResign,
+    log,
+  });
 
   // ── Deploy default request-interceptor plugin (shared) ────────────────────
   deployRequestInterceptorPlugin(pluginsDir, log);
