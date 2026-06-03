@@ -38,7 +38,7 @@
   - B3. ✅ 主进程接线:config `remote{enabled,url,user,pass,deviceUser,devicePass}` + `instanceId` 自动生成;`syncRemote()` 启动/配置变更时连/断并 `addTransport("nats")`(默认关);`removeTransport` 热关闭。
   - B4. ✅ 部署教程 `docs/nats-deploy.md`(安装/TLS/用户+ACL/WebSocket/systemd/防火墙/自测/配对)。
   - B5. ✅ **去中心化 JWT(配一次,零服务器操作)**:`net/remote-jwt.ts` 用 `nats-jwt`+`nkeys.js` **本地签发** hub/device 用户 JWT(权限来自 `remote-subjects`,3 单测);`syncRemote` 在有 `accountSeed`+`accountId` 时用 `jwtAuthenticator` 连接(否则回退 user/pass);`pair` JWT 模式**现签** device 凭据塞二维码;部署教程重写为一次性 `nsc` operator/APP/作用域签名密钥 + `nats-resolver`。
-  - B6. ⏳ 联调:你服务器按 `docs/nats-deploy.md` 配置一次 → 桌面填 `remote.{url,accountSeed,accountId}` 重启 → `pair` 出码 → 手机/CLI 连。**之后新增桌面/手机零服务器操作。**
+  - B6. ✅ **真机联调通过**:Docker 一键部署(`scripts/nats-setup.sh`,Docker-only + 国内代理/镜像/包管理器自适配 + MEMORY resolver 免 push)→ `scripts/remote-smoke.mjs` 实测 `✅ OK round-trip`(TLS + JWT 签发 + 连通 + pub/sub)。剩:把 `remote` 块填进桌面 config + 真机装入 app 后验证 `remote bus connected`。
 - **C 原生 App**
   - C1. Swift(iOS)/Kotlin(Android)NATS 客户端:远程检查器 + 通知 + 审批。
   - C2. 可选 JetStream(离线通知/持久化);可选应用层 E2E。
