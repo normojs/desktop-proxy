@@ -5,12 +5,12 @@
  * metadata about the installation.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { platform } from "node:os";
 
-import { appResourcesDir, appAsarPath, appMetaPath, electronBinaryCandidates } from "./layout.js";
+import { appResourcesDir, appAsarPath, appMetaPath, electronBinaryCandidates, isAppImage } from "./layout.js";
 import { ADAPTERS } from "./ide/adapters.js";
 
 export interface CodexInstall {
@@ -48,6 +48,12 @@ export function locateApp(appHint?: string): CodexInstall {
   const isMac = platform() === "darwin";
 
   if (appHint && existsSync(appHint)) {
+    if (isAppImage(appHint) || !statSync(appHint).isDirectory()) {
+      throw new Error(
+        `"${appHint}" looks like an AppImage or single-file bundle — these are read-only and can't be patched.\n` +
+          `Extract it first (e.g. "<app>.AppImage --appimage-extract") and pass --app <extracted dir>.`,
+      );
+    }
     return parseAppBundle(appHint, isMac);
   }
 

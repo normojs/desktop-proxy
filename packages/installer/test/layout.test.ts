@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 
-import { appResourcesDir, appAsarPath, appMetaPath, electronBinaryCandidates } from "../src/layout";
+import { appResourcesDir, appAsarPath, appMetaPath, electronBinaryCandidates, permissionHint, isAppImage } from "../src/layout";
 
 describe("appResourcesDir", () => {
   it("uses Contents/Resources on macOS", () => {
@@ -60,5 +60,22 @@ describe("electronBinaryCandidates", () => {
   });
   it("uses the lowercased launcher on Linux", () => {
     expect(electronBinaryCandidates("/opt/X", "linux", "Cursor")[0]).toBe(join("/opt/X", "cursor"));
+  });
+});
+
+describe("permissionHint", () => {
+  it("gives OS-specific guidance", () => {
+    expect(permissionHint("darwin", "/Applications/X.app")).toMatch(/App Management|Full Disk Access/);
+    expect(permissionHint("win32", "C:/Program Files/X")).toMatch(/Administrator|Program Files/);
+    expect(permissionHint("linux", "/opt/X")).toMatch(/sudo|own the install/);
+  });
+});
+
+describe("isAppImage", () => {
+  it("detects .AppImage paths (case-insensitive)", () => {
+    expect(isAppImage("/home/u/Cursor.AppImage")).toBe(true);
+    expect(isAppImage("/home/u/Cursor.appimage")).toBe(true);
+    expect(isAppImage("/opt/Cursor")).toBe(false);
+    expect(isAppImage("/Applications/Cursor.app")).toBe(false);
   });
 });

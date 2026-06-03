@@ -21,6 +21,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { permissionHint } from "./layout.js";
+
 export interface AsarHeaderInfo {
   /** SHA-256 hex of the header JSON bytes */
   headerHash: string;
@@ -180,15 +182,10 @@ export function readFileInAsar(asarPath: string, relPath: string): Buffer {
 
 function annotatePermError(e: unknown, target: string): Error {
   const err = e as NodeJS.ErrnoException;
-  if (
-    err &&
-    (err.code === "EPERM" || err.code === "EACCES") &&
-    /\/Applications\//.test(target)
-  ) {
+  if (err && (err.code === "EPERM" || err.code === "EACCES")) {
     const msg =
       `Permission denied writing to ${target}.\n\n` +
-      `macOS App Management is blocking modification of the app bundle.\n` +
-      `Run this command with sudo, or grant Terminal Full Disk Access in System Settings.\n\n` +
+      `${permissionHint(process.platform, target)}\n\n` +
       `Original error: ${err.message}`;
     const wrapped = new Error(msg);
     (wrapped as NodeJS.ErrnoException).code = err.code;

@@ -86,3 +86,32 @@ function frameworkRank(fw: string, name: string): number {
   if (fw === "Electron Framework.framework") return 1;
   return 2;
 }
+
+/**
+ * OS-appropriate guidance when modifying an app bundle is blocked (EPERM/EACCES).
+ * macOS hits App Management; Windows needs elevation for Program Files; Linux
+ * needs ownership/root for /opt.
+ */
+export function permissionHint(plat: Plat, target: string): string {
+  if (isMac(plat)) {
+    return (
+      `macOS App Management is blocking modification of ${target}.\n` +
+      `Run this command with sudo, or grant your terminal Full Disk Access in System Settings.`
+    );
+  }
+  if (plat === "win32") {
+    return (
+      `Windows blocked modification of ${target} (apps under Program Files need elevation).\n` +
+      `Run the terminal as Administrator, or use a per-user install (e.g. under %LOCALAPPDATA%).`
+    );
+  }
+  return (
+    `Permission denied modifying ${target}.\n` +
+    `Run with sudo, or ensure you own the install dir (apps under /opt require root).`
+  );
+}
+
+/** Linux AppImages (single-file, read-only) can't be patched in place. */
+export function isAppImage(p: string): boolean {
+  return /\.appimage$/i.test(p);
+}
