@@ -71,9 +71,17 @@ $SUDO mkdir -p "$NATS_DIR/tls" "$NATS_DIR/jwt"
 
 # ── 2. TLS cert ──────────────────────────────────────────────────────────────
 CERT="$NATS_DIR/tls/cert.pem"; KEY="$NATS_DIR/tls/key.pem"
-if [ "$TLS" = "letsencrypt" ]; then
+if [ "$TLS" = "existing" ]; then
+  # Reuse a cert you already obtained (recommended when the box already runs
+  # nginx/web on 80/443 — no standalone, no conflict). Set CERT_FILE + KEY_FILE.
+  CERT="${CERT_FILE:?TLS=existing requires CERT_FILE=/path/fullchain.pem}"
+  KEY="${KEY_FILE:?TLS=existing requires KEY_FILE=/path/privkey.pem}"
+  { [ -f "$CERT" ] && [ -f "$KEY" ]; } || { echo "CERT_FILE/KEY_FILE not found"; exit 1; }
+  say "Using existing certificate $CERT"
+elif [ "$TLS" = "letsencrypt" ]; then
   [ -n "$DOMAIN" ] || { echo "letsencrypt requires DOMAIN=..."; exit 1; }
   say "Obtaining cert for $DOMAIN — needs DNS A record → this server and port 80 reachable"
+  say "NOTE: --standalone needs port 80 FREE. If nginx/web uses 80, stop it briefly or use TLS=existing instead."
   need ufw && { $SUDO ufw allow 80/tcp >/dev/null 2>&1 || true; }
   need certbot || $SUDO apt-get install -y certbot
   # --keep-until-expiring makes re-runs reuse the existing cert (no rate-limit hit).

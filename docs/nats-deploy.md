@@ -46,6 +46,49 @@ sudo GH_MIRROR=https://ghproxy.com/ DOMAIN=nats.your-domain.com TLS=letsencrypt 
 
 ---
 
+## 服务器已有 nginx / 其他网站(共存,推荐 TLS=existing)
+
+NATS 用 `4222`/`8443`,与 nginx 的 `80`/`443` **不冲突**,可直接共存(放行 4222/8443 即可),**NATS 本身不需要 nginx 配置**。唯一注意:**别用 `certbot --standalone`**(会抢 80 端口)。两步:
+
+1) 用你**现有的 nginx** 给该子域签证(不抢 80、不停机)。先加一个最小 vhost:
+```nginx
+# /etc/nginx/conf.d/nats.conf
+server { listen 80; server_name nats.dprox.mbu.ltd; root /var/www/html; }
+```
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+sudo apt-get install -y python3-certbot-nginx
+sudo certbot --nginx -d nats.dprox.mbu.ltd          # 或:certbot certonly --webroot -w /var/www/html -d nats.dprox.mbu.ltd
+```
+
+2) 跑脚本,用 **`TLS=existing`** 指向刚拿到的证书(NATS 自己在 4222/8443 上用它,绕开 nginx):
+```bash
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/normojs/desktop-proxy/main/scripts/nats-setup.sh -o nats-setup.sh
+sudo TLS=existing PM=systemd DOMAIN=nats.dprox.mbu.ltd \
+  CERT_FILE=/etc/letsencrypt/live/nats.dprox.mbu.ltd/fullchain.pem \
+  KEY_FILE=/etc/letsencrypt/live/nats.dprox.mbu.ltd/privkey.pem \
+  GH_MIRROR=https://ghfast.top/ bash nats-setup.sh
+```
+桌面/手机直连 NATS:桌面 `tls://nats.dprox.mbu.ltd:4222`,手机 `wss://nats.dprox.mbu.ltd:8443`(都不经 nginx)。
+
+**(可选)让手机走标准 443**:用现有 nginx 把 443 的某子域反代到 NATS 的 websocket。需把 NATS websocket 设为内网 `no_tls`(改 `nats-server.conf` 的 websocket 段为 `port: 8080` + `no_tls: true`),再:
+```nginx
+server {
+  listen 443 ssl;  server_name nats.dprox.mbu.ltd;
+  ssl_certificate     /etc/letsencrypt/live/nats.dprox.mbu.ltd/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/nats.dprox.mbu.ltd/privkey.pem;
+  location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host; proxy_read_timeout 3600s;
+  }
+}
+```
+手机改用 `wss://nats.dprox.mbu.ltd:443`(即 `wss://nats.dprox.mbu.ltd`)。
+
+---
+
 ## 部署方式与开机自启(三选一)
 
 - **systemd(推荐)**:见 A5;`systemctl enable --now nats` 即**开机自启**。
