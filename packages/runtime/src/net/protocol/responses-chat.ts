@@ -44,18 +44,35 @@ function roleFor(role: unknown): string {
   return r;
 }
 
-/** Convert a Responses `input` (array of items, or a string) into chat messages. */
+/** Extract the reasoning text from a Responses `reasoning` input item. */
+function reasoningTextOf(item: Json): string {
+  if (typeof item.reasoning_content === "string") return item.reasoning_content;
+  if (Array.isArray(item.summary)) {
+    return item.summary.map((s) => (typeof (s as Json)?.text === "string" ? (s as Json).text : "")).join("");
+  }
+  return textOf(item.content);
+}
+
+/**
+ * Convert a Responses `input` (array of items, or a string) into chat messages.
+ * Carries a preceding `reasoning` item onto the next assistant message as
+ * `reasoning_content` — thinking models (e.g. DeepSeek reasoner) reject multi-turn
+ * history that omits the reasoning they produced.
+ */
 function inputToMessages(input: unknown, messages: Json[]): void {
   if (typeof input === "string") {
     if (input) messages.push({ role: "user", content: input });
     return;
   }
   if (!Array.isArray(input)) return;
+  let pendingReasoning = "";
   for (const raw of input) {
     const item = raw as Json;
     const type = item?.type as string | undefined;
-    if (type === "function_call") {
-      messages.push({
+    if (type === "reasoning") {
+      pendingReasoning = reasoningTextOf(item) || pendingReasoning;
+    } else if (type === "function_call") {
+      const msg: Json = {
         role: "assistant",
         content: null,
         tool_calls: [
@@ -65,7 +82,12 @@ function inputToMessages(input: unknown, messages: Json[]): void {
             function: { name: String(item.name ?? ""), arguments: String(item.arguments ?? "") },
           },
         ],
-      });
+      };
+      if (pendingReasoning) {
+        msg.reasoning_content = pendingReasoning;
+        pendingReasoning = "";
+      }
+      messages.push(msg);
     } else if (type === "function_call_output") {
       messages.push({
         role: "tool",
@@ -73,7 +95,13 @@ function inputToMessages(input: unknown, messages: Json[]): void {
         content: textOf(item.output),
       });
     } else if (type === "message" || item.role) {
-      messages.push({ role: roleFor(item.role), content: textOf(item.content) });
+      const role = roleFor(item.role);
+      const msg: Json = { role, content: textOf(item.content) };
+      if (role === "assistant" && pendingReasoning) {
+        msg.reasoning_content = pendingReasoning;
+        pendingReasoning = "";
+      }
+      messages.push(msg);
     }
   }
 }

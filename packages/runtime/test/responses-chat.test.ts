@@ -27,6 +27,21 @@ describe("responsesToChat (request translation)", () => {
     expect((chat.stream_options as Record<string, unknown>).include_usage).toBe(true);
   });
 
+  it("carries a reasoning item onto the next assistant message (thinking-mode round-trip)", () => {
+    const chat = responsesToChat({
+      model: "deepseek-v4-flash",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "q" }] },
+        { type: "reasoning", summary: [{ type: "summary_text", text: "let me think" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "a" }] },
+      ],
+    });
+    const messages = chat.messages as Array<Record<string, unknown>>;
+    const assistant = messages.find((m) => m.role === "assistant")!;
+    expect(assistant.content).toBe("a");
+    expect(assistant.reasoning_content).toBe("let me think");
+  });
+
   it("translates function_call / function_call_output and tools", () => {
     const chat = responsesToChat({
       model: "m",
