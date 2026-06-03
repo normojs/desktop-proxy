@@ -172,6 +172,8 @@ node packages/installer/dist/cli.js <command> [options]
 | `watch install\|uninstall\|status` | Auto re-apply the patch when the app updates (macOS launchd, Linux systemd `.path`, Windows logon task). |
 | `create-plugin <dir>` | Scaffold a new plugin (`--id` / `--name` / `--scope`). |
 | `validate-plugin <dir> [--json]` | Validate a plugin's manifest and entry file. |
+| `pair [--name <label>]` | Show a QR/link to pair a phone with the remote (NATS) bus. |
+| `relay <on\|off\|status>` | Local **model-traffic relay**: capture, rewrite, fail over and (with `--upstream-api chat`) translate an IDE core's model calls. `--codex` wires `~/.codex/config.toml` + login bypass. See [docs/model-relay.md](docs/model-relay.md). |
 
 **Options:**
 

@@ -156,6 +156,8 @@ node packages/installer/dist/cli.js <command> [options]
 | `watch install\|uninstall\|status` | app 更新后自动重打补丁（macOS）。 |
 | `create-plugin <dir>` | 脚手架生成新插件（`--id`/`--name`/`--scope`）。 |
 | `validate-plugin <dir> [--json]` | 校验插件的 manifest 与入口文件。 |
+| `pair [--name <label>]` | 显示二维码/链接，与手机配对远程（NATS）总线。 |
+| `relay <on\|off\|status>` | 本地**模型流量中转**：抓包、改写模型、并发回退，`--upstream-api chat` 还能翻译 IDE 原生核心的模型调用；`--codex` 写 `~/.codex/config.toml` 并免登录。见 [docs/model-relay.md](docs/model-relay.md)。 |
 
 **选项**（用于 `install` / `repair`）：
 
