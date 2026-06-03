@@ -19,6 +19,7 @@ import { analyzeEntry } from "./net/traffic-analyze.js";
 import { extractUsage } from "./net/traffic-cost.js";
 import { redactEntry } from "./net/redact.js";
 import type { RelayTransforms } from "./net/transform.js";
+import { startRelayUi, type UiEntry } from "./net/relay-ui.js";
 
 const USER_ROOT = join(homedir(), ".desktop-proxy");
 const LOG_DIR = join(USER_ROOT, "log");
@@ -33,6 +34,8 @@ interface RelayCfg {
   fallbackModels?: string[];
   upstreamApi?: "responses" | "chat";
   transforms?: RelayTransforms;
+  /** Local dashboard port (default relay port + 1; set 0 to disable). */
+  uiPort?: number;
 }
 
 function ts(): string {
@@ -65,6 +68,9 @@ async function main(): Promise<void> {
   const log = (level: string, ...args: unknown[]) => console.log(`[${ts()}] [${level}] relay:`, ...args);
 
   const pending = new Map<string, { method: string; url: string; headers: Record<string, string>; body: string | null }>();
+  // In-memory ring buffer powering the local dashboard.
+  const recent: UiEntry[] = [];
+  const RECENT_MAX = 1000;
 
   const opts: RelayOptions = {
     port: r.port ?? 8788,
@@ -119,15 +125,30 @@ async function main(): Promise<void> {
         reqBody: req?.body,
         resBody: resp.body,
       };
-      writer.write(redact ? redactEntry(record) : record);
+      const persisted = redact ? redactEntry(record) : record;
+      writer.write(persisted);
+      recent.push(persisted as UiEntry);
+      if (recent.length > RECENT_MAX) recent.shift();
     },
   });
 
   log("info", `daemon listening on http://127.0.0.1:${handle.port} → ${r.upstream}${r.upstreamApi === "chat" ? " (Responses↔chat)" : ""}`);
   log("info", `recording to ${join(LOG_DIR, "relay-daemon.ndjson")} — Ctrl-C to stop.`);
 
+  // Local dashboard (no-injection visibility). uiPort 0 disables it.
+  const uiPort = r.uiPort ?? handle.port + 1;
+  let uiServer: ReturnType<typeof startRelayUi> | null = null;
+  if (uiPort > 0) {
+    try {
+      uiServer = startRelayUi(uiPort, () => recent, log);
+    } catch (e) {
+      log("warn", "dashboard failed to start:", String(e));
+    }
+  }
+
   const shutdown = () => {
     log("info", "shutting down");
+    uiServer?.close();
     void handle.close().finally(() => {
       writer.close();
       process.exit(0);
