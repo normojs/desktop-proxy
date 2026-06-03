@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { platform } from "node:os";
 
 import { appResourcesDir, appAsarPath, appMetaPath, electronBinaryCandidates } from "./layout.js";
+import { ADAPTERS } from "./ide/adapters.js";
 
 export interface CodexInstall {
   platform: string;
@@ -25,39 +26,17 @@ export interface CodexInstall {
   bundleId: string | null;
 }
 
-const HOME = process.env.HOME || process.env.USERPROFILE || "~";
-const LOCALAPPDATA = process.env.LOCALAPPDATA || "";
-const PROGRAMFILES = process.env.PROGRAMFILES || "";
-
-/** Build best-effort search paths for an app across macOS/Windows/Linux. */
-function searchPathsFor(appName: string): string[] {
-  const lower = appName.toLowerCase();
-  return [
-    // macOS
-    `/Applications/${appName}.app`,
-    join(HOME, "Applications", `${appName}.app`),
-    // Windows (app root contains <App>.exe + resources/)
-    join(LOCALAPPDATA, "Programs", lower),
-    join(LOCALAPPDATA, "Programs", appName),
-    join(PROGRAMFILES, appName),
-    // Linux (.deb/tar installs; AppImage is read-only and unsupported)
-    `/opt/${appName}`,
-    `/opt/${lower}`,
-    `/usr/share/${lower}`,
-    `/usr/lib/${lower}`,
-    join(HOME, ".local", "share", lower),
-  ];
-}
-
+// Known apps come from the IDE adapter registry (single source of truth).
 const KNOWN_APPS: Record<string, {
   name: string;
   bundleId: string;
   searchPaths: string[];
-}> = {
-  codex: { name: "Codex", bundleId: "com.openai.codex", searchPaths: searchPathsFor("Codex") },
-  cursor: { name: "Cursor", bundleId: "com.cursor.app", searchPaths: searchPathsFor("Cursor") },
-  windsurf: { name: "Windsurf", bundleId: "com.codeium.windsurf", searchPaths: searchPathsFor("Windsurf") },
-};
+}> = Object.fromEntries(
+  Object.values(ADAPTERS).map((a) => [
+    a.id,
+    { name: a.displayName, bundleId: a.bundleId ?? "", searchPaths: a.searchPaths() },
+  ]),
+);
 
 /**
  * Locate a target Electron app. Supports:
