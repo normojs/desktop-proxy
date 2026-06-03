@@ -15,7 +15,12 @@
  */
 
 import { homedir, platform as osPlatform } from "node:os";
-import { join } from "node:path";
+import { posix as pathPosix, win32 as pathWin32 } from "node:path";
+
+/** Join paths with the *target* platform's separator (not the host's). */
+function joinFor(plat: string): (...parts: string[]) => string {
+  return plat === "win32" ? pathWin32.join : pathPosix.join;
+}
 
 export interface ProxyConfigOptions {
   /** Proxy address as host:port or a full URL. */
@@ -116,9 +121,10 @@ export function isVscodeFork(bundleId: string | null | undefined): boolean {
 }
 
 function userDataRoot(plat: string, home: string): string {
-  if (plat === "darwin") return join(home, "Library", "Application Support");
-  if (plat === "win32") return process.env.APPDATA ?? join(home, "AppData", "Roaming");
-  return join(home, ".config"); // linux
+  const j = joinFor(plat);
+  if (plat === "darwin") return j(home, "Library", "Application Support");
+  if (plat === "win32") return process.env.APPDATA ?? j(home, "AppData", "Roaming");
+  return j(home, ".config"); // linux
 }
 
 export function resolveForkPaths(
@@ -130,9 +136,10 @@ export function resolveForkPaths(
   if (!def) return null;
   const home = env.home ?? homedir();
   const plat = env.platform ?? osPlatform();
+  const j = joinFor(plat);
   return {
     dataDir: def.dataDir,
-    argvJson: join(home, def.argvDir, "argv.json"),
-    settingsJson: join(userDataRoot(plat, home), def.dataDir, "User", "settings.json"),
+    argvJson: j(home, def.argvDir, "argv.json"),
+    settingsJson: j(userDataRoot(plat, home), def.dataDir, "User", "settings.json"),
   };
 }

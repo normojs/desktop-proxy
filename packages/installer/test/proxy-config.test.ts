@@ -93,6 +93,12 @@ describe("fork path resolution", () => {
     expect(p?.settingsJson).toBe("/home/me/.config/Windsurf/User/settings.json");
   });
 
+  it("resolves Cursor paths for a Windows target (backslashes, regardless of host)", () => {
+    const p = resolveForkPaths("com.cursor.app", { platform: "win32", home: "C:\\Users\\me" });
+    expect(p?.argvJson).toBe("C:\\Users\\me\\.cursor\\argv.json");
+    expect(p?.settingsJson.endsWith("Cursor\\User\\settings.json")).toBe(true);
+  });
+
   it("returns null for non-fork or unknown apps", () => {
     expect(resolveForkPaths("com.openai.codex", { platform: "darwin", home: "/x" })).toBeNull();
     expect(resolveForkPaths(null)).toBeNull();
