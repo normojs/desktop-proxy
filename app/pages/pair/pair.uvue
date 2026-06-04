@@ -1,0 +1,75 @@
+<template>
+	<scroll-view style="flex:1">
+		<view class="wrap">
+			<text class="h1">配对桌面</text>
+			<text class="sub">桌面运行 dprox pair，把链接粘到这里</text>
+			<textarea class="input" v-model="link" placeholder="dprox://pair?d=..." />
+			<button class="btn" type="primary" @click="onConnect">连接</button>
+			<text class="state">{{ status }}</text>
+		</view>
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	import { connect, setStateListener } from "@/common/store.uts"
+
+	const link = ref("")
+	const status = ref("未连接")
+
+	const onConnect = () => {
+		status.value = "连接中…"
+		setStateListener((s : string) : void => {
+			status.value = s
+			if (s.indexOf("authed") >= 0) {
+				setStateListener(null)
+				// 延迟到 socket 回调栈之外再切 tab
+				setTimeout(() => {
+					uni.switchTab({ url: "/pages/overview/overview" } as SwitchTabOptions)
+				}, 120)
+			}
+		})
+		const err = connect(link.value)
+		if (err != "") {
+			status.value = err
+			setStateListener(null)
+		}
+	}
+</script>
+
+<style>
+	.wrap {
+		padding: 24px 20px;
+	}
+
+	.h1 {
+		font-size: 22px;
+		font-weight: bold;
+		color: #111827;
+		margin-bottom: 6px;
+	}
+
+	.sub {
+		font-size: 13px;
+		color: #6b7280;
+		margin-bottom: 18px;
+	}
+
+	.input {
+		border: 1px solid #d1d5db;
+		border-radius: 8px;
+		padding: 12px;
+		height: 100px;
+		font-size: 13px;
+		background-color: #ffffff;
+		margin-bottom: 16px;
+	}
+
+	.btn {
+		margin-bottom: 16px;
+	}
+
+	.state {
+		font-size: 14px;
+		color: #2563eb;
+	}
+</style>

@@ -1,12 +1,40 @@
 {
 	"pages": [
 		{
-			"path": "pages/index/index",
+			"path": "pages/overview/overview",
 			"style": {
-				"navigationBarTitleText": "dprox"
+				"navigationBarTitleText": "概览"
+			}
+		},
+		{
+			"path": "pages/relay/relay",
+			"style": {
+				"navigationBarTitleText": "中继"
+			}
+		},
+		{
+			"path": "pages/pair/pair",
+			"style": {
+				"navigationBarTitleText": "配对"
 			}
 		}
 	],
+	"tabBar": {
+		"color": "#6b7280",
+		"selectedColor": "#2563eb",
+		"backgroundColor": "#ffffff",
+		"borderStyle": "black",
+		"list": [
+			{
+				"pagePath": "pages/overview/overview",
+				"text": "概览"
+			},
+			{
+				"pagePath": "pages/relay/relay",
+				"text": "中继"
+			}
+		]
+	},
 	"globalStyle": {
 		"navigationBarTextStyle": "black",
 		"navigationBarTitleText": "dprox",

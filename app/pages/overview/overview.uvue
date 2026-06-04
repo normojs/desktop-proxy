@@ -1,0 +1,178 @@
+<template>
+	<scroll-view style="flex:1">
+		<view class="wrap">
+			<view class="head">
+				<text class="h1">概览</text>
+				<text class="dot" :class="connected ? 'on' : 'off'">{{ connected ? '已连接' : '未连接' }}</text>
+			</view>
+
+			<view v-if="!connected" class="card">
+				<text class="muted">{{ errText }}</text>
+				<button class="btn" type="primary" @click="goPair">去配对</button>
+			</view>
+
+			<view v-else>
+				<view class="card">
+					<view class="row">
+						<text class="label">中继</text>
+						<text class="val" :class="enabled ? 'green' : 'gray'">{{ enabled ? '开启' : '关闭' }}</text>
+					</view>
+					<view class="row"><text class="label">上游</text><text class="val">{{ upstream }}</text></view>
+					<view class="row"><text class="label">协议</text><text class="val">{{ upstreamApi }}</text></view>
+					<view class="row"><text class="label">Key</text><text class="val">{{ apiKeyMasked }}</text></view>
+					<view class="row"><text class="label">端口</text><text class="val">{{ port }}</text></view>
+				</view>
+
+				<view class="card">
+					<text class="ctitle">模型映射</text>
+					<text class="mono">{{ modelMapText }}</text>
+				</view>
+
+				<view class="card">
+					<view class="row"><text class="label">花费</text><text class="val">{{ budgetText }}</text></view>
+					<view class="row"><text class="label">路由 / 护栏</text><text class="val">{{ routesText }}</text></view>
+				</view>
+
+				<button class="btn" type="primary" @click="load">刷新</button>
+				<button class="btn" type="default" @click="goPair">重新配对</button>
+			</view>
+		</view>
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	import { request, isConnected } from "@/common/store.uts"
+
+	const connected = ref(false)
+	const errText = ref("未连接，请先配对")
+	const enabled = ref(false)
+	const upstream = ref("")
+	const upstreamApi = ref("")
+	const apiKeyMasked = ref("")
+	const port = ref("")
+	const modelMapText = ref("{}")
+	const budgetText = ref("无预算")
+	const routesText = ref("0 / 0")
+
+	function load() {
+		if (!isConnected()) {
+			connected.value = false
+			errText.value = "未连接，请先配对"
+			return
+		}
+		connected.value = true
+		request("relay.summary", null).then((r : any) : void => {
+			const o = JSON.parse(JSON.stringify(r)) as UTSJSONObject
+			enabled.value = o.getBoolean("enabled") == true
+			upstream.value = o.getString("upstream") ?? "—"
+			upstreamApi.value = o.getString("upstreamApi") ?? "—"
+			apiKeyMasked.value = o.getString("apiKeyMasked") ?? "—"
+			port.value = (o.getNumber("port") ?? 0).toString()
+			const mm = o.getJSON("modelMap")
+			modelMapText.value = mm != null ? JSON.stringify(mm!) : "{}"
+			routesText.value = (o.getNumber("routes") ?? 0).toString() + " / " + (o.getNumber("guardrails") ?? 0).toString()
+			const b = o.getJSON("budget")
+			budgetText.value = b != null ? ("今日 $" + ((b!.getNumber("daySpent") ?? 0).toString())) : "无预算"
+		}).catch((e : any) : void => {
+			errText.value = "查询失败: " + e
+			connected.value = false
+		})
+	}
+
+	onShow(() => {
+		load()
+	})
+
+	const goPair = () => {
+		uni.navigateTo({ url: "/pages/pair/pair" } as NavigateToOptions)
+	}
+</script>
+
+<style>
+	.wrap {
+		padding: 16px;
+	}
+
+	.head {
+		flex-direction: row;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 14px;
+	}
+
+	.h1 {
+		font-size: 22px;
+		font-weight: bold;
+		color: #111827;
+	}
+
+	.dot {
+		font-size: 12px;
+		padding: 3px 10px;
+		border-radius: 10px;
+	}
+
+	.dot.on {
+		color: #047857;
+		background-color: #d1fae5;
+	}
+
+	.dot.off {
+		color: #6b7280;
+		background-color: #e5e7eb;
+	}
+
+	.card {
+		background-color: #ffffff;
+		border-radius: 10px;
+		padding: 14px;
+		margin-bottom: 12px;
+	}
+
+	.row {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+		padding: 6px 0;
+	}
+
+	.label {
+		font-size: 14px;
+		color: #6b7280;
+	}
+
+	.val {
+		font-size: 14px;
+		color: #111827;
+	}
+
+	.val.green {
+		color: #047857;
+	}
+
+	.val.gray {
+		color: #9ca3af;
+	}
+
+	.ctitle {
+		font-size: 13px;
+		color: #6b7280;
+		margin-bottom: 6px;
+	}
+
+	.mono {
+		font-size: 13px;
+		color: #111827;
+	}
+
+	.muted {
+		font-size: 14px;
+		color: #6b7280;
+		margin-bottom: 12px;
+	}
+
+	.btn {
+		margin-top: 6px;
+		margin-bottom: 6px;
+	}
+</style>
