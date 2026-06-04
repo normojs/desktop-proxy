@@ -1,0 +1,84 @@
+// 可移植 UTF-8 与字节工具（remote-core/util.ts 的 UTS 移植）。
+// NATS 帧按“字节”计长，且提示词含中文（UTF-8），故必须按字节精确处理，
+// string.length（UTF-16 单元）不够准确。
+// 实现保守：手动循环、单参 fromCharCode、显式填充 Uint8Array，降低 UTS stdlib 风险。
+
+export function utf8Encode(str : string) : Uint8Array {
+	const out : number[] = []
+	for (let i = 0; i < str.length; i++) {
+		const c = str.charCodeAt(i)
+		if (c < 0x80) {
+			out.push(c)
+		} else if (c < 0x800) {
+			out.push(0xc0 | (c >> 6))
+			out.push(0x80 | (c & 0x3f))
+		} else if (c >= 0xd800 && c <= 0xdbff) {
+			// 高代理项，与后一个低代理项组合成码点
+			i++
+			const c2 = str.charCodeAt(i)
+			const cp = 0x10000 + ((c & 0x3ff) << 10) + (c2 & 0x3ff)
+			out.push(0xf0 | (cp >> 18))
+			out.push(0x80 | ((cp >> 12) & 0x3f))
+			out.push(0x80 | ((cp >> 6) & 0x3f))
+			out.push(0x80 | (cp & 0x3f))
+		} else {
+			out.push(0xe0 | (c >> 12))
+			out.push(0x80 | ((c >> 6) & 0x3f))
+			out.push(0x80 | (c & 0x3f))
+		}
+	}
+	const bytes = new Uint8Array(out.length)
+	for (let i = 0; i < out.length; i++) {
+		bytes[i] = out[i]
+	}
+	return bytes
+}
+
+export function utf8Decode(bytes : Uint8Array) : string {
+	let out = ""
+	let i = 0
+	while (i < bytes.length) {
+		const b = bytes[i]
+		i++
+		if (b < 0x80) {
+			out += String.fromCharCode(b)
+		} else if (b < 0xe0) {
+			const b2 = bytes[i]
+			i++
+			out += String.fromCharCode(((b & 0x1f) << 6) | (b2 & 0x3f))
+		} else if (b < 0xf0) {
+			const b2 = bytes[i]
+			i++
+			const b3 = bytes[i]
+			i++
+			out += String.fromCharCode(((b & 0x0f) << 12) | ((b2 & 0x3f) << 6) | (b3 & 0x3f))
+		} else {
+			const b2 = bytes[i]
+			i++
+			const b3 = bytes[i]
+			i++
+			const b4 = bytes[i]
+			i++
+			const cp = ((b & 0x07) << 18) | ((b2 & 0x3f) << 12) | ((b3 & 0x3f) << 6) | (b4 & 0x3f)
+			const c = cp - 0x10000
+			out += String.fromCharCode(0xd800 + (c >> 10))
+			out += String.fromCharCode(0xdc00 + (c & 0x3ff))
+		}
+	}
+	return out
+}
+
+export function utf8Length(str : string) : number {
+	return utf8Encode(str).length
+}
+
+export function concatBytes(a : Uint8Array, b : Uint8Array) : Uint8Array {
+	const out = new Uint8Array(a.length + b.length)
+	for (let i = 0; i < a.length; i++) {
+		out[i] = a[i]
+	}
+	for (let i = 0; i < b.length; i++) {
+		out[a.length + i] = b[i]
+	}
+	return out
+}

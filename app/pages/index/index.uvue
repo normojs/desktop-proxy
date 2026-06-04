@@ -6,7 +6,19 @@
 </template>
 
 <script setup lang="uts">
+	import { utf8Encode, utf8Decode, utf8Length } from "@/common/dprox-core/util.uts"
+
 	const title = ref('Hello')
+
+	// dprox-core P1 自检：UTF-8 字节往返 + 字节长度（运行后看 title 与控制台）
+	onMounted(() => {
+		const s = "你好world🚀"
+		const okRound = utf8Decode(utf8Encode(s)) == s
+		const okLen = utf8Length("你好") == 6 && utf8Length("🚀") == 4
+		const pass = okRound && okLen
+		console.log("[dprox-core] util self-check round=" + okRound + " len=" + okLen)
+		title.value = pass ? "dprox-core util ✓" : "dprox-core util ✗"
+	})
 </script>
 
 <style>
