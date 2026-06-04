@@ -1,29 +1,39 @@
 <template>
-	<view>
-		<image class="logo" src="/static/logo.png"></image>
-		<text class="title">{{title}}</text>
-	</view>
+	<scroll-view style="flex:1">
+		<view class="box">
+			<text class="title">{{ title }}</text>
+			<text class="hint">粘贴桌面 `dprox pair` 的配对链接，连接并查询 relay.summary</text>
+			<textarea class="input" v-model="link" placeholder="desktopproxy://pair?d=..." />
+			<button class="btn" type="primary" @click="onConnect">连接并查询 relay.summary</button>
+			<text class="state">状态: {{ state }}</text>
+			<text class="result">{{ result }}</text>
+		</view>
+	</scroll-view>
 </template>
 
 <script setup lang="uts">
+	// #ifdef H5
+	import nacl from "tweetnacl"
+	// #endif
 	import { utf8Encode, utf8Decode, utf8Length, concatBytes } from "@/common/dprox-core/util.uts"
 	import { crc16, encodeSeed, decodeSeed, base64UrlFromBytes, PREFIX_USER } from "@/common/dprox-core/nkey.uts"
 	import { rpcSubject, clientEventSubscription, topicFromSubject, pairingFromString } from "@/common/dprox-core/subjects.uts"
 	import { NatsParser, buildPub } from "@/common/dprox-core/nats-protocol.uts"
 	import { BusClient } from "@/common/dprox-core/bus-client.uts"
+	import { NatsConnection, SignFn, StateFn } from "@/common/dprox-core/connection.uts"
 
 	const title = ref('Hello')
+	const link = ref('')
+	const state = ref('未连接')
+	const result = ref('')
 
-	// dprox-core P1 自检：util(UTF-8) + nkey(base32/crc16/seed/base64url)
+	// dprox-core 纯逻辑自检（每次运行验证 5 个模块 + 配对解析）
 	onMounted(() => {
-		// util
 		const s = "你好world🚀"
 		const okRound = utf8Decode(utf8Encode(s)) == s
 		const okLen = utf8Length("你好") == 6 && utf8Length("🚀") == 4
 
-		// nkey: crc16 标准向量
 		const okCrc = crc16(utf8Encode("123456789")) == 0x31c3
-		// nkey: seed 编解码往返
 		const seed = new Uint8Array(32)
 		for (let i = 0; i < 32; i++) {
 			seed[i] = (i * 7 + 3) & 0xff
@@ -37,21 +47,16 @@
 			}
 		}
 		const okSeed = enc.charAt(0) == "S" && enc.charAt(1) == "U" && seedMatch
-		// nkey: base64url
 		const okB64 = base64UrlFromBytes(utf8Encode("foobar")) == "Zm9vYmFy"
 
-		// subjects
 		const okSubj = rpcSubject("i1", "config.get") == "dp.i1.rpc.config.get"
 			&& clientEventSubscription("i1") == "dp.i1.h2c.event.>"
 			&& topicFromSubject("dp.i1.h2c.event.budget:alert") == "budget:alert"
 			&& topicFromSubject("dp.i1.rpc.x") == null
-
-		// subjects: 配对链接解析（用本模块自身 base64url 编码构造）
 		const pj = "{\"v\":1,\"instanceId\":\"i1\",\"url\":\"nats://x\",\"wsUrl\":\"wss://x\",\"jwt\":\"J\",\"seed\":\"S\"}"
 		const pp = pairingFromString("desktopproxy://pair?d=" + base64UrlFromBytes(utf8Encode(pj)))
 		const okPair = pp != null && pp!.instanceId == "i1" && pp!.wsUrl == "wss://x" && pp!.jwt == "J" && pp!.seed == "S" && pp!.user == null
 
-		// nats-protocol: 解析 INFO+PING、含中文负载的 MSG、buildPub 字节长度
 		const parser = new NatsParser()
 		const ctrl = parser.push(utf8Encode("INFO {\"nonce\":\"abc\"}\r\nPING\r\n"))
 		const okCtrl = ctrl.length == 2 && ctrl[0].kind == "INFO" && ctrl[1].kind == "PING"
@@ -62,7 +67,6 @@
 		const okPub = pubStr.startsWith("PUB dp.i1.rpc.config.set _INBOX.r1 14\r\n") && pubStr.endsWith("\r\n")
 		const okNats = okCtrl && okMsg && okPub
 
-		// bus-client: RPC 发布到正确主题/inbox + 事件分发（同步部分）
 		let pubSubject = ""
 		let pubReply : string | null = null
 		const bus = new BusClient("i1", "c1", (subject : string, reply : string | null, payload : string) : void => {
@@ -71,7 +75,7 @@
 		}, 15000)
 		bus.request("config.get", null)
 		const okReq = pubSubject == "dp.i1.rpc.config.get" && pubReply == "_INBOX.c1.1"
-		bus.handleMessage("_INBOX.c1.1", "{\"ok\":true,\"result\":1}") // 解析并清理在途请求
+		bus.handleMessage("_INBOX.c1.1", "{\"ok\":true,\"result\":1}")
 		let gotEvt = false
 		bus.subscribe("budget:alert", (data : any) : void => {
 			gotEvt = true
@@ -81,20 +85,90 @@
 
 		const pass = okRound && okLen && okCrc && okSeed && okB64 && okSubj && okPair && okNats && okBus
 		console.log("[dprox-core] self-check util(round=" + okRound + ",len=" + okLen + ") nkey(crc=" + okCrc + ",seed=" + okSeed + ",b64=" + okB64 + ") subjects(" + okSubj + ",pair=" + okPair + ") nats(ctrl=" + okCtrl + ",msg=" + okMsg + ",pub=" + okPub + ") bus(req=" + okReq + ",evt=" + gotEvt + ")")
-		title.value = pass ? "dprox-core +pair ✓" : "dprox-core ✗ (see console)"
+		title.value = pass ? "dprox-core ✓ (logic ok)" : "dprox-core ✗ (see console)"
 	})
+
+	const onConnect = () => {
+		result.value = ""
+		const pp = pairingFromString(link.value)
+		if (pp == null) {
+			state.value = "配对链接解析失败"
+			return
+		}
+		if (pp!.wsUrl == null) {
+			state.value = "配对缺少 wsUrl（请在桌面 remote 配置加 wss://...:8443）"
+			return
+		}
+		if (pp!.seed == null || pp!.jwt == null) {
+			state.value = "配对缺少 seed/jwt"
+			return
+		}
+		const seedBytes = decodeSeed(pp!.seed!).seed
+		let signFn : SignFn = (nonce : Uint8Array) : Uint8Array => {
+			return new Uint8Array(0) // 原生占位，后续用 uts-nkeys 插件
+		}
+		// #ifdef H5
+		signFn = (nonce : Uint8Array) : Uint8Array => {
+			const kp = nacl.sign.keyPair.fromSeed(seedBytes)
+			return nacl.sign.detached(nonce, kp.secretKey) as Uint8Array
+		}
+		// #endif
+		const clientId = "phone-" + Date.now().toString()
+		let conn : NatsConnection | null = null
+		const onState : StateFn = (st : string, detail : string) : void => {
+			state.value = detail != "" ? (st + " " + detail) : st
+			if (st == "authed" && conn != null) {
+				conn!.getBus().request("relay.summary", null).then((r : any) : void => {
+					result.value = "relay.summary = " + JSON.stringify(r)
+				}).catch((e : any) : void => {
+					result.value = "relay.summary 失败: " + e
+				})
+			}
+		}
+		conn = new NatsConnection(pp!.wsUrl!, pp!.jwt!, pp!.instanceId, clientId, signFn, onState, 15000)
+		conn!.connect()
+	}
 </script>
 
 <style>
-	.logo {
-		height: 100px;
-		width: 100px;
-		margin: 100px auto 25px auto;
+	.box {
+		padding: 20px;
 	}
 
 	.title {
 		font-size: 18px;
-		color: #8f8f94;
+		color: #1f2937;
 		text-align: center;
+		margin-bottom: 12px;
+	}
+
+	.hint {
+		font-size: 13px;
+		color: #6b7280;
+		margin-bottom: 10px;
+	}
+
+	.input {
+		border: 1px solid #d1d5db;
+		border-radius: 6px;
+		padding: 10px;
+		height: 90px;
+		font-size: 13px;
+		margin-bottom: 12px;
+	}
+
+	.btn {
+		margin-bottom: 16px;
+	}
+
+	.state {
+		font-size: 14px;
+		color: #2563eb;
+		margin-bottom: 10px;
+	}
+
+	.result {
+		font-size: 13px;
+		color: #111827;
 	}
 </style>

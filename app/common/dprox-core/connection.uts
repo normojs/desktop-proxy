@@ -1,0 +1,127 @@
+// NATS-over-WebSocket 连接（把 uni socket 接到已移植的 NatsParser + BusClient）。
+// 流程: connect → 收到 INFO → ed25519 签名 nonce(注入 sign) → CONNECT(jwt+sig) → SUB 事件/inbox → authed。
+// 之后 BusClient.request 走 PUB(二进制)，收到 MSG 喂回 BusClient。
+// 用全局 socket API(uni.onSocketOpen/onSocketMessage/...)——与官方示例一致，单连接可靠。
+// ed25519 签名按平台注入: H5 用 tweetnacl; 原生用 uts-nkeys 插件(后续)。
+
+import { NatsParser, NatsMsg, buildConnect, ConnectOpts, buildSub, buildPub, PONG } from "./nats-protocol.uts"
+import { BusClient } from "./bus-client.uts"
+import { utf8Decode, utf8Encode } from "./util.uts"
+import { base64UrlFromBytes } from "./nkey.uts"
+
+// 对 nonce 做 ed25519 签名，返回 64 字节签名。
+export type SignFn = (nonce : Uint8Array) => Uint8Array
+// 连接状态回调: state ∈ connecting/ws-open/authed/closed/error。
+export type StateFn = (state : string, detail : string) => void
+
+export class NatsConnection {
+	private wsUrl : string
+	private jwt : string
+	private sign : SignFn
+	private onState : StateFn
+	private bus : BusClient
+	private parser : NatsParser = new NatsParser()
+	private authed : boolean = false
+
+	constructor(wsUrl : string, jwt : string, instanceId : string, clientId : string, sign : SignFn, onState : StateFn, timeoutMs : number) {
+		this.wsUrl = wsUrl
+		this.jwt = jwt
+		this.sign = sign
+		this.onState = onState
+		const that = this
+		this.bus = new BusClient(instanceId, clientId, (subject : string, reply : string | null, payload : string) : void => {
+			that.sendBytes(buildPub(subject, reply, payload))
+		}, timeoutMs)
+	}
+
+	getBus() : BusClient {
+		return this.bus
+	}
+
+	connect() : void {
+		this.onState("connecting", this.wsUrl)
+		const that = this
+		uni.connectSocket({
+			url: this.wsUrl,
+			success: (_res : any) : void => {},
+			fail: (_err : any) : void => {
+				that.onState("error", "connectSocket fail")
+			}
+		} as ConnectSocketOptions)
+		uni.onSocketOpen((_res : OnSocketOpenCallbackResult) : void => {
+			that.onState("ws-open", "")
+		})
+		uni.onSocketMessage((res : OnSocketMessageCallbackResult) : void => {
+			that.onData(res.data)
+		})
+		uni.onSocketError((_res : OnSocketErrorCallbackResult) : void => {
+			that.onState("error", "ws error")
+		})
+		uni.onSocketClose((_res : OnSocketCloseCallbackResult) : void => {
+			that.authed = false
+			that.onState("closed", "")
+			that.bus.rejectAll("connection closed")
+		})
+	}
+
+	private onData(data : any) : void {
+		let bytes : Uint8Array
+		if (data instanceof ArrayBuffer) {
+			bytes = new Uint8Array(data as ArrayBuffer)
+		} else {
+			bytes = utf8Encode(data as string)
+		}
+		const msgs = this.parser.push(bytes)
+		for (let i = 0; i < msgs.length; i++) {
+			this.handle(msgs[i])
+		}
+	}
+
+	private handle(m : NatsMsg) : void {
+		if (m.kind == "INFO") {
+			this.sendConnect(m.info)
+		} else if (m.kind == "PING") {
+			this.sendString(PONG)
+		} else if (m.kind == "MSG") {
+			if (m.payload != null) {
+				this.bus.handleMessage(m.subject, utf8Decode(m.payload!))
+			}
+		} else if (m.kind == "ERR") {
+			this.onState("error", m.message)
+		}
+	}
+
+	private sendConnect(info : UTSJSONObject | null) : void {
+		const opts = new ConnectOpts()
+		opts.jwt = this.jwt
+		if (info != null) {
+			const nonce = info!.getString("nonce")
+			if (nonce != null) {
+				const sig = this.sign(utf8Encode(nonce!))
+				opts.sig = base64UrlFromBytes(sig)
+			}
+		}
+		this.sendString(buildConnect(opts))
+		this.sendString(buildSub(this.bus.eventSubscription(), "1"))
+		this.sendString(buildSub(this.bus.inboxSubscription(), "2"))
+		this.authed = true
+		this.onState("authed", "")
+	}
+
+	private sendString(s : string) : void {
+		this.sendBytes(utf8Encode(s))
+	}
+
+	private sendBytes(bytes : Uint8Array) : void {
+		uni.sendSocketMessage({
+			data: bytes.buffer
+		} as SendSocketMessageOptions)
+	}
+
+	close() : void {
+		uni.closeSocket({
+			code: 1000,
+			reason: "client close"
+		} as CloseSocketOptions)
+	}
+}
