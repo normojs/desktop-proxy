@@ -10,6 +10,7 @@
 	import { crc16, encodeSeed, decodeSeed, base64UrlFromBytes, PREFIX_USER } from "@/common/dprox-core/nkey.uts"
 	import { rpcSubject, clientEventSubscription, topicFromSubject } from "@/common/dprox-core/subjects.uts"
 	import { NatsParser, buildPub } from "@/common/dprox-core/nats-protocol.uts"
+	import { BusClient } from "@/common/dprox-core/bus-client.uts"
 
 	const title = ref('Hello')
 
@@ -56,9 +57,26 @@
 		const okPub = pubStr.startsWith("PUB dp.i1.rpc.config.set _INBOX.r1 14\r\n") && pubStr.endsWith("\r\n")
 		const okNats = okCtrl && okMsg && okPub
 
-		const pass = okRound && okLen && okCrc && okSeed && okB64 && okSubj && okNats
-		console.log("[dprox-core] self-check util(round=" + okRound + ",len=" + okLen + ") nkey(crc=" + okCrc + ",seed=" + okSeed + ",b64=" + okB64 + ") subjects(" + okSubj + ") nats(ctrl=" + okCtrl + ",msg=" + okMsg + ",pub=" + okPub + ")")
-		title.value = pass ? "dprox-core +nats ✓" : "dprox-core ✗ (see console)"
+		// bus-client: RPC 发布到正确主题/inbox + 事件分发（同步部分）
+		let pubSubject = ""
+		let pubReply : string | null = null
+		const bus = new BusClient("i1", "c1", (subject : string, reply : string | null, payload : string) : void => {
+			pubSubject = subject
+			pubReply = reply
+		}, 15000)
+		bus.request("config.get", null)
+		const okReq = pubSubject == "dp.i1.rpc.config.get" && pubReply == "_INBOX.c1.1"
+		bus.handleMessage("_INBOX.c1.1", "{\"ok\":true,\"result\":1}") // 解析并清理在途请求
+		let gotEvt = false
+		bus.subscribe("budget:alert", (data : any) : void => {
+			gotEvt = true
+		})
+		bus.handleMessage("dp.i1.h2c.event.budget:alert", "{\"data\":{\"scope\":\"daily\"}}")
+		const okBus = okReq && gotEvt
+
+		const pass = okRound && okLen && okCrc && okSeed && okB64 && okSubj && okNats && okBus
+		console.log("[dprox-core] self-check util(round=" + okRound + ",len=" + okLen + ") nkey(crc=" + okCrc + ",seed=" + okSeed + ",b64=" + okB64 + ") subjects(" + okSubj + ") nats(ctrl=" + okCtrl + ",msg=" + okMsg + ",pub=" + okPub + ") bus(req=" + okReq + ",evt=" + gotEvt + ")")
+		title.value = pass ? "dprox-core +bus ✓" : "dprox-core ✗ (see console)"
 	})
 </script>
 

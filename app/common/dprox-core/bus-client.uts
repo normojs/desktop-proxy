@@ -1,0 +1,133 @@
+// 总线客户端（remote-core/bus-client.ts 的 UTS 移植）：基于 NATS 主题的 RPC 请求/应答 + 事件订阅。
+// 传输无关：注入一个 publish 函数（接 WebSocket 的 buildPub），并把收到的 MSG 负载喂进来。
+// RPC：PUB dp.<id>.rpc.<method> reply=_INBOX.<cid>.<rid>；hub 在 inbox 回 {ok,result|error}。
+// 事件：dp.<id>.h2c.event.<topic> 负载 {data}。
+// 原生友好：that=this 闭包、Map、UTSJSONObject 下标 as、显式 null 判断。
+
+import { rpcSubject, clientEventSubscription, topicFromSubject } from "./subjects.uts"
+
+export type PublishFn = (subject : string, reply : string | null, payload : string) => void
+
+type Pending = {
+	resolve : (v : any) => void
+	reject : (e : Error) => void
+	timer : number
+}
+
+type EventHandler = (data : any) => void
+
+export class BusClient {
+	private instanceId : string
+	private clientId : string
+	private publish : PublishFn
+	private timeoutMs : number
+	private seq : number = 0
+	private pending : Map<string, Pending> = new Map<string, Pending>()
+	private subs : Map<string, Array<EventHandler>> = new Map<string, Array<EventHandler>>()
+
+	constructor(instanceId : string, clientId : string, publish : PublishFn, timeoutMs : number) {
+		this.instanceId = instanceId
+		this.clientId = clientId
+		this.publish = publish
+		this.timeoutMs = timeoutMs
+	}
+
+	private inboxPrefix() : string {
+		return "_INBOX." + this.clientId + "."
+	}
+
+	eventSubscription() : string {
+		return clientEventSubscription(this.instanceId)
+	}
+
+	inboxSubscription() : string {
+		return this.inboxPrefix() + ">"
+	}
+
+	request(method : string, params : any) : Promise<any> {
+		this.seq += 1
+		const rid = this.seq.toString()
+		const inbox = this.inboxPrefix() + rid
+		const that = this
+		const timeoutMs = this.timeoutMs
+		return new Promise<any>((resolve : (v : any) => void, reject : (e : Error) => void) => {
+			let timer = 0
+			if (timeoutMs > 0) {
+				timer = setTimeout(() => {
+					that.pending.delete(rid)
+					reject(new Error("request \"" + method + "\" timed out"))
+				}, timeoutMs)
+			}
+			const p : Pending = { resolve: resolve, reject: reject, timer: timer }
+			that.pending.set(rid, p)
+			that.publish(rpcSubject(that.instanceId, method), inbox, JSON.stringify(params))
+		})
+	}
+
+	subscribe(topic : string, handler : EventHandler) : () => void {
+		let arr = this.subs.get(topic)
+		if (arr == null) {
+			arr = [] as Array<EventHandler>
+			this.subs.set(topic, arr!)
+		}
+		arr!.push(handler)
+		const that = this
+		return () : void => {
+			const a = that.subs.get(topic)
+			if (a != null) {
+				const idx = a!.indexOf(handler)
+				if (idx >= 0) {
+					a!.splice(idx, 1)
+				}
+			}
+		}
+	}
+
+	// 喂入收到的 NATS MSG（主题 + 已解码的 UTF-8 负载）。
+	handleMessage(subject : string, payload : string) : void {
+		const prefix = this.inboxPrefix()
+		if (subject.startsWith(prefix)) {
+			const rid = subject.substring(prefix.length)
+			const p = this.pending.get(rid)
+			if (p == null) {
+				return
+			}
+			this.pending.delete(rid)
+			if (p!.timer > 0) {
+				clearTimeout(p!.timer)
+			}
+			const env = JSON.parse(payload) as UTSJSONObject
+			const ok = env["ok"] as boolean
+			if (ok == false) {
+				p!.reject(new Error(env["error"] as string))
+			} else {
+				p!.resolve(env["result"])
+			}
+			return
+		}
+		const topic = topicFromSubject(subject)
+		if (topic == null) {
+			return
+		}
+		const arr = this.subs.get(topic)
+		if (arr == null) {
+			return
+		}
+		const env = JSON.parse(payload) as UTSJSONObject
+		const data = env["data"]
+		for (let i = 0; i < arr!.length; i++) {
+			arr![i](data)
+		}
+	}
+
+	// 断线时让所有在途请求失败。
+	rejectAll(reason : string) : void {
+		this.pending.forEach((p : Pending, rid : string) => {
+			if (p.timer > 0) {
+				clearTimeout(p.timer)
+			}
+			p.reject(new Error(reason))
+		})
+		this.pending.clear()
+	}
+}
