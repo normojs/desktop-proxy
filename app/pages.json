@@ -13,6 +13,12 @@
 			}
 		},
 		{
+			"path": "pages/traffic/traffic",
+			"style": {
+				"navigationBarTitleText": "流量"
+			}
+		},
+		{
 			"path": "pages/pair/pair",
 			"style": {
 				"navigationBarTitleText": "配对"
@@ -32,6 +38,10 @@
 			{
 				"pagePath": "pages/relay/relay",
 				"text": "中继"
+			},
+			{
+				"pagePath": "pages/traffic/traffic",
+				"text": "流量"
 			}
 		]
 	},

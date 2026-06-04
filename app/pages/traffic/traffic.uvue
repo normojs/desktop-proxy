@@ -1,0 +1,153 @@
+<template>
+	<scroll-view style="flex:1">
+		<view class="wrap">
+			<text class="h1">流量</text>
+
+			<view v-if="!connected" class="card">
+				<text class="muted">{{ errText }}</text>
+				<button class="btn" type="primary" @click="goPair">去配对</button>
+			</view>
+
+			<view v-else>
+				<view v-if="items.length == 0" class="card">
+					<text class="muted">暂无调用记录</text>
+				</view>
+				<view v-for="(it, idx) in items" :key="idx" class="item">
+					<view class="itop">
+						<text class="model">{{ it.model }}</text>
+						<text class="cost">{{ it.cost }}</text>
+					</view>
+					<view class="ibot">
+						<text class="sub">{{ it.line }}</text>
+						<text class="sub">{{ it.t }}</text>
+					</view>
+				</view>
+				<button class="btn" type="primary" @click="load">刷新</button>
+			</view>
+		</view>
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	import { request, isConnected } from "@/common/store.uts"
+
+	type TrafficItem = {
+		model : string
+		line : string
+		cost : string
+		t : string
+	}
+
+	const connected = ref(false)
+	const errText = ref("未连接，请先配对")
+	const items = ref<TrafficItem[]>([])
+
+	function load() {
+		if (!isConnected()) {
+			connected.value = false
+			errText.value = "未连接，请先配对"
+			return
+		}
+		connected.value = true
+		request("traffic.list", null).then((r : any) : void => {
+			const o = JSON.parse(JSON.stringify(r)) as UTSJSONObject
+			const arr = o.getArray("items")
+			const list : TrafficItem[] = []
+			if (arr != null) {
+				for (let i = 0; i < arr!.length; i++) {
+					const e = arr![i] as UTSJSONObject
+					const status = (e.getNumber("status") ?? 0).toString()
+					const service = e.getString("service") ?? ""
+					const model = e.getString("model") ?? "?"
+					const cost = e.getNumber("costUsd")
+					const tokens = e.getNumber("totalTokens")
+					const tRaw = e.getString("t") ?? ""
+					list.push({
+						model: model,
+						line: status + "  " + service + (tokens != null ? ("  " + tokens!.toString() + " tok") : ""),
+						cost: cost != null ? ("$" + cost!.toString()) : "—",
+						t: tRaw.length >= 19 ? tRaw.substring(11, 19) : tRaw
+					} as TrafficItem)
+				}
+			}
+			items.value = list
+		}).catch((e : any) : void => {
+			errText.value = "查询失败: " + e
+			connected.value = false
+		})
+	}
+
+	onShow(() => {
+		load()
+	})
+
+	const goPair = () => {
+		uni.navigateTo({ url: "/pages/pair/pair" } as NavigateToOptions)
+	}
+</script>
+
+<style>
+	.wrap {
+		padding: 16px;
+	}
+
+	.h1 {
+		font-size: 22px;
+		font-weight: bold;
+		color: #111827;
+		margin-bottom: 14px;
+	}
+
+	.card {
+		background-color: #ffffff;
+		border-radius: 10px;
+		padding: 14px;
+		margin-bottom: 12px;
+	}
+
+	.item {
+		background-color: #ffffff;
+		border-radius: 10px;
+		padding: 12px 14px;
+		margin-bottom: 8px;
+	}
+
+	.itop {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 4px;
+	}
+
+	.model {
+		font-size: 14px;
+		color: #111827;
+		font-weight: bold;
+	}
+
+	.cost {
+		font-size: 14px;
+		color: #2563eb;
+	}
+
+	.ibot {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+	}
+
+	.sub {
+		font-size: 12px;
+		color: #6b7280;
+	}
+
+	.muted {
+		font-size: 14px;
+		color: #6b7280;
+		margin-bottom: 12px;
+	}
+
+	.btn {
+		margin-top: 6px;
+	}
+</style>

@@ -173,7 +173,7 @@ async function main(): Promise<void> {
   // is enabled. Failures are non-fatal: the daemon keeps relaying locally.
   let remoteBus: DaemonBus | null = null;
   try {
-    remoteBus = await startDaemonRemoteBus({ relayPort, log });
+    remoteBus = await startDaemonRemoteBus({ relayPort, recent, log });
   } catch (e) {
     log("warn", "remote bus failed:", String(e));
   }

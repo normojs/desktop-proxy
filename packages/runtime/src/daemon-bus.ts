@@ -21,6 +21,7 @@ import { buildRelaySummary } from "./net/relay-summary.js";
 import { redactConfigForRemote } from "./net/redact.js";
 import { isRemoteMethodAllowed } from "./net/remote-subjects.js";
 import type { BudgetState } from "./net/budget.js";
+import type { UiEntry } from "./net/relay-ui.js";
 
 type Logger = (level: string, ...args: unknown[]) => void;
 
@@ -72,7 +73,7 @@ export interface DaemonBus {
  * Connect the daemon to the remote bus. Returns null (and logs why) when remote
  * is not configured, so the daemon keeps running as a pure local relay.
  */
-export async function startDaemonRemoteBus(opts: { relayPort: number; log: Logger }): Promise<DaemonBus | null> {
+export async function startDaemonRemoteBus(opts: { relayPort: number; recent: UiEntry[]; log: Logger }): Promise<DaemonBus | null> {
   const cfg = readConfig();
   const r = (cfg.remote ?? {}) as RemoteCfg;
   if (r.enabled !== true || !r.url) {
@@ -122,6 +123,46 @@ export async function startDaemonRemoteBus(opts: { relayPort: number; log: Logge
   bus.handle("config.get", (_p, ctx) => {
     const c = { ...readConfig(), version: "daemon" };
     return ctx.source === "nats" ? redactConfigForRemote(c) : c;
+  });
+
+  // Recent relay calls from the in-memory ring buffer (newest first), wrapped in
+  // { items } so phone clients can read it via UTSJSONObject.getArray.
+  bus.handle("traffic.list", () => {
+    const list = opts.recent;
+    const n = list.length;
+    const start = n > 200 ? n - 200 : 0;
+    const items: Array<Record<string, unknown>> = [];
+    for (let i = n - 1; i >= start; i--) {
+      const e = list[i];
+      items.push({
+        i,
+        t: e.startedDateTime ?? "",
+        method: e.method ?? "",
+        service: e.service ?? "",
+        model: e.model ?? "",
+        status: e.status ?? 0,
+        costUsd: e.usage?.costUsd ?? null,
+        totalTokens: e.usage?.totalTokens ?? null,
+      });
+    }
+    return { items };
+  });
+
+  bus.handle("traffic.detail", (p) => {
+    const i = typeof p === "number" ? p : -1;
+    const e = i >= 0 && i < opts.recent.length ? opts.recent[i] : null;
+    if (!e) return null;
+    return {
+      t: e.startedDateTime ?? "",
+      method: e.method ?? "",
+      url: e.url ?? "",
+      status: e.status ?? 0,
+      service: e.service ?? "",
+      model: e.model ?? "",
+      usage: e.usage ?? null,
+      reqBody: e.reqBody ?? null,
+      resBody: e.resBody ?? null,
+    };
   });
 
   opts.log("info", `remote bus connected: ${r.url} (instance ${instanceId})`);
