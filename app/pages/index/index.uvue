@@ -7,17 +7,39 @@
 
 <script setup lang="uts">
 	import { utf8Encode, utf8Decode, utf8Length } from "@/common/dprox-core/util.uts"
+	import { crc16, encodeSeed, decodeSeed, base64UrlFromBytes, PREFIX_USER } from "@/common/dprox-core/nkey.uts"
 
 	const title = ref('Hello')
 
-	// dprox-core P1 自检：UTF-8 字节往返 + 字节长度（运行后看 title 与控制台）
+	// dprox-core P1 自检：util(UTF-8) + nkey(base32/crc16/seed/base64url)
 	onMounted(() => {
+		// util
 		const s = "你好world🚀"
 		const okRound = utf8Decode(utf8Encode(s)) == s
 		const okLen = utf8Length("你好") == 6 && utf8Length("🚀") == 4
-		const pass = okRound && okLen
-		console.log("[dprox-core] util self-check round=" + okRound + " len=" + okLen)
-		title.value = pass ? "dprox-core util ✓" : "dprox-core util ✗"
+
+		// nkey: crc16 标准向量
+		const okCrc = crc16(utf8Encode("123456789")) == 0x31c3
+		// nkey: seed 编解码往返
+		const seed = new Uint8Array(32)
+		for (let i = 0; i < 32; i++) {
+			seed[i] = (i * 7 + 3) & 0xff
+		}
+		const enc = encodeSeed(seed, PREFIX_USER)
+		const dec = decodeSeed(enc)
+		let seedMatch = dec.seed.length == 32 && dec.typePrefix == PREFIX_USER
+		for (let i = 0; i < 32; i++) {
+			if (dec.seed[i] != seed[i]) {
+				seedMatch = false
+			}
+		}
+		const okSeed = enc.charAt(0) == "S" && enc.charAt(1) == "U" && seedMatch
+		// nkey: base64url
+		const okB64 = base64UrlFromBytes(utf8Encode("foobar")) == "Zm9vYmFy"
+
+		const pass = okRound && okLen && okCrc && okSeed && okB64
+		console.log("[dprox-core] self-check util(round=" + okRound + ",len=" + okLen + ") nkey(crc=" + okCrc + ",seed=" + okSeed + ",b64=" + okB64 + ")")
+		title.value = pass ? "dprox-core util+nkey ✓" : "dprox-core ✗ (see console)"
 	})
 </script>
 
