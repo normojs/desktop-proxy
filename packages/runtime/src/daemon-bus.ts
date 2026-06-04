@@ -22,6 +22,7 @@ import { redactConfigForRemote } from "./net/redact.js";
 import { isRemoteMethodAllowed } from "./net/remote-subjects.js";
 import type { BudgetState } from "./net/budget.js";
 import type { UiEntry } from "./net/relay-ui.js";
+import { reconstructSessions } from "./net/chat-reconstruct.js";
 
 type Logger = (level: string, ...args: unknown[]) => void;
 
@@ -162,6 +163,38 @@ export async function startDaemonRemoteBus(opts: { relayPort: number; recent: Ui
       usage: e.usage ?? null,
       reqBody: e.reqBody ?? null,
       resBody: e.resBody ?? null,
+    };
+  });
+
+  // Reconstructed conversations from captured relay traffic (the IDE's chat).
+  bus.handle("chat.sessions", () => {
+    const sessions = reconstructSessions(opts.recent);
+    return {
+      sessions: sessions.map((s) => ({
+        key: s.key,
+        title: s.title,
+        model: s.model ?? "",
+        turnCount: s.turnCount,
+        requestCount: s.requestCount,
+        totalTokens: s.totalTokens,
+        totalCostUsd: s.totalCostUsd,
+        lastActivity: s.lastActivity ?? "",
+      })),
+    };
+  });
+
+  bus.handle("chat.session", (p) => {
+    const key = typeof p === "string" ? p : "";
+    const s = reconstructSessions(opts.recent).find((x) => x.key === key);
+    if (!s) return null;
+    return {
+      title: s.title,
+      model: s.model ?? "",
+      turns: s.turns.map((t) => ({
+        role: t.role,
+        text: t.text,
+        tools: (t.toolCalls ?? []).map((c) => c.name).join(", "),
+      })),
     };
   });
 

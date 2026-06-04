@@ -122,6 +122,8 @@ export const REMOTE_METHODS: ReadonlySet<string> = new Set([
   "traffic.clear",
   "traffic.export",
   "relay.summary",
+  "chat.sessions",
+  "chat.session",
 ]);
 
 export function isRemoteMethodAllowed(method: string): boolean {
