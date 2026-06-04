@@ -95,9 +95,11 @@ function extractD(s : string) : string | null {
 }
 
 function parsePairingJson(json : string) : PairingPayload | null {
+	// JSON.parseObject 在非法 JSON 时返回 null（不像 JSON.parse 会抛异常），
+	// 这样被截断/损坏的配对链接会优雅地返回"解析失败"而非崩溃。
 	let obj : UTSJSONObject | null = null
 	try {
-		obj = JSON.parse(json) as UTSJSONObject
+		obj = JSON.parseObject(json)
 	} catch (e) {
 		return null
 	}
