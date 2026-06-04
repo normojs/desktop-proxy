@@ -70,7 +70,7 @@ function base64UrlDecodeToString(b64url: string): string {
   return out;
 }
 
-/** Parse a `desktopproxy://pair?d=<base64url(json)>` link. */
+/** Parse a `dprox://pair?d=<base64url(json)>` link. */
 export function pairingFromString(s: string): PairingPayload | null {
   const m = /[?&]d=([^&]+)/.exec(s);
   if (!m) return null;

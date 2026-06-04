@@ -31,7 +31,7 @@ excluded from the framework's pnpm/vitest/tsc. Build/run with **HBuilderX**.
 
 ## Connect to a desktop
 
-`dprox pair` on the desktop → QR / `desktopproxy://pair?d=…` with
+`dprox pair` on the desktop → QR / `dprox://pair?d=…` with
 `{ instanceId, url, wsUrl, jwt, seed }`. Scan → store → connect `wsUrl`
 (`wss://…:8443`) → CONNECT with `jwt` + ed25519 `sig` of the server nonce.
 

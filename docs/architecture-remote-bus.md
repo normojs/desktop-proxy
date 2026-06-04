@@ -38,7 +38,7 @@
   - A6 → 并入 B:独立进程(CLI/手机)用不了 Electron IPC,需网络传输(NATS),故 Node 客户端库随 B 一起做。
 - **B 远程打通(代码完成,联调需你的 NATS 服务器)**
   - B1. ✅ `net/nats-transport.ts`:`createNatsHubTransport`(桌面)+ `createNatsClientTransport`(手机/CLI);`net/remote-subjects.ts` 主题/配对/ACL(纯逻辑,10 单测,hub 映射用 mock 连接测)。
-  - B2. ✅ 配对:`desktop-proxy pair` 打印二维码 + `desktopproxy://pair?d=...`(含 instanceId/url/设备凭据);ACL = NATS 主题权限。
+  - B2. ✅ 配对:`desktop-proxy pair` 打印二维码 + `dprox://pair?d=...`(含 instanceId/url/设备凭据);ACL = NATS 主题权限。
   - B3. ✅ 主进程接线:config `remote{enabled,url,user,pass,deviceUser,devicePass}` + `instanceId` 自动生成;`syncRemote()` 启动/配置变更时连/断并 `addTransport("nats")`(默认关);`removeTransport` 热关闭。
   - B4. ✅ 部署教程 `docs/nats-deploy.md`(安装/TLS/用户+ACL/WebSocket/systemd/防火墙/自测/配对)。
   - B5. ✅ **去中心化 JWT(配一次,零服务器操作)**:`net/remote-jwt.ts` 用 `nats-jwt`+`nkeys.js` **本地签发** hub/device 用户 JWT(权限来自 `remote-subjects`,3 单测);`syncRemote` 在有 `accountSeed`+`accountId` 时用 `jwtAuthenticator` 连接(否则回退 user/pass);`pair` JWT 模式**现签** device 凭据塞二维码;部署教程重写为一次性 `nsc` operator/APP/作用域签名密钥 + `nats-resolver`。

@@ -1,6 +1,6 @@
 // NATS 主题方案（remote-core/subjects.ts 的 UTS 移植）。
 // 手机是客户端：向 dp.<id>.rpc.<method> 发布，订阅 dp.<id>.h2c.event.>。
-// 含配对链接解析（desktopproxy://pair?d=<base64url(json)>）。
+// 含配对链接解析（dprox://pair?d=<base64url(json)>）。
 
 import { utf8Decode } from "./util.uts"
 

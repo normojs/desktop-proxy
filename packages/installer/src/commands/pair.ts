@@ -28,7 +28,7 @@ interface PairingPayload {
   pass?: string;
 }
 function pairingToString(p: PairingPayload): string {
-  return `desktopproxy://pair?d=${Buffer.from(JSON.stringify(p), "utf8").toString("base64url")}`;
+  return `dprox://pair?d=${Buffer.from(JSON.stringify(p), "utf8").toString("base64url")}`;
 }
 
 // Device subject permissions — must match remote-subjects.devicePermissions().

@@ -68,7 +68,7 @@ export function buildPairingPayload(p: Omit<PairingPayload, "v">): PairingPayloa
 
 /** Serialize a pairing payload for a QR code / deep link. */
 export function pairingToString(p: PairingPayload): string {
-  return `desktopproxy://pair?d=${Buffer.from(JSON.stringify(p), "utf8").toString("base64url")}`;
+  return `dprox://pair?d=${Buffer.from(JSON.stringify(p), "utf8").toString("base64url")}`;
 }
 export function pairingFromString(s: string): PairingPayload | null {
   const m = /[?&]d=([^&]+)/.exec(s);

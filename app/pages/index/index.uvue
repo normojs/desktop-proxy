@@ -3,7 +3,7 @@
 		<view class="box">
 			<text class="title">{{ title }}</text>
 			<text class="hint">粘贴桌面 `dprox pair` 的配对链接，连接并查询 relay.summary</text>
-			<textarea class="input" v-model="link" placeholder="desktopproxy://pair?d=..." />
+			<textarea class="input" v-model="link" placeholder="dprox://pair?d=..." />
 			<button class="btn" type="primary" @click="onConnect">连接并查询 relay.summary</button>
 			<text class="state">状态: {{ state }}</text>
 			<text class="result">{{ result }}</text>
@@ -54,7 +54,7 @@
 			&& topicFromSubject("dp.i1.h2c.event.budget:alert") == "budget:alert"
 			&& topicFromSubject("dp.i1.rpc.x") == null
 		const pj = "{\"v\":1,\"instanceId\":\"i1\",\"url\":\"nats://x\",\"wsUrl\":\"wss://x\",\"jwt\":\"J\",\"seed\":\"S\"}"
-		const pp = pairingFromString("desktopproxy://pair?d=" + base64UrlFromBytes(utf8Encode(pj)))
+		const pp = pairingFromString("dprox://pair?d=" + base64UrlFromBytes(utf8Encode(pj)))
 		const okPair = pp != null && pp!.instanceId == "i1" && pp!.wsUrl == "wss://x" && pp!.jwt == "J" && pp!.seed == "S" && pp!.user == null
 
 		const parser = new NatsParser()

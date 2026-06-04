@@ -64,7 +64,7 @@ observe-first app first (see P4 in `docs/remote-app-plan.md`).
 
 ## What the app does (features)
 
-1. **Pair** — scan a `desktopproxy://pair?d=…` QR → store `{instanceId, wsUrl, jwt,
+1. **Pair** — scan a `dprox://pair?d=…` QR → store `{instanceId, wsUrl, jwt,
    seed}` (support multiple desktops).
 2. **Overview** — today's cost vs budget (ring), requests/tokens/success, a relay
    quick-toggle, and a live traffic feed.
@@ -159,6 +159,6 @@ surface per `docs/ui/README.md`.
 
 ## Pairing a desktop (for testing)
 
-On the desktop: `dprox pair` prints a QR / `desktopproxy://pair?d=…` carrying
+On the desktop: `dprox pair` prints a QR / `dprox://pair?d=…` carrying
 `{ instanceId, url, wsUrl, jwt, seed }`. Requires the desktop's `config.remote`
 (NATS) set up — see desktop-proxy `docs/nats-deploy.md`.

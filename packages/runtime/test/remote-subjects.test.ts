@@ -45,14 +45,14 @@ describe("pairing", () => {
       name: "My Mac",
     });
     const s = pairingToString(p);
-    expect(s.startsWith("desktopproxy://pair?d=")).toBe(true);
+    expect(s.startsWith("dprox://pair?d=")).toBe(true);
     const back = pairingFromString(s);
     expect(back).toEqual(p);
     expect(back?.wsUrl).toBe("wss://host:8443");
   });
   it("rejects malformed pairing strings", () => {
     expect(pairingFromString("nope")).toBeNull();
-    expect(pairingFromString("desktopproxy://pair?d=%%%")).toBeNull();
+    expect(pairingFromString("dprox://pair?d=%%%")).toBeNull();
   });
 });
 

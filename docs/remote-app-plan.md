@@ -54,7 +54,7 @@ Exposes `nkeySign(seed: string, nonce: string): string` (base64url sig):
   existing ed25519/crypto UTS plugin before writing our own.
 
 ### Pairing
-- Scan `desktopproxy://pair?d=<base64url(json)>` → `{instanceId, url, wsUrl, jwt, seed, name}`.
+- Scan `dprox://pair?d=<base64url(json)>` → `{instanceId, url, wsUrl, jwt, seed, name}`.
 - Store encrypted (keychain/keystore via a UTS plugin or `uni` encrypted storage).
 - Support a **list of paired desktops**; switch the active one.
 

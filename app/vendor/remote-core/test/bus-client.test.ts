@@ -12,7 +12,7 @@ describe("subjects", () => {
 
   it("parses a pairing link (incl. wsUrl)", () => {
     const payload = { v: 1, instanceId: "i1", url: "tls://h:4222", wsUrl: "wss://h:8443", jwt: "ey", seed: "SU" };
-    const link = `desktopproxy://pair?d=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
+    const link = `dprox://pair?d=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
     expect(pairingFromString(link)).toEqual(payload);
     expect(pairingFromString("garbage")).toBeNull();
   });

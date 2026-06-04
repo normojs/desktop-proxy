@@ -24,7 +24,7 @@ Every element maps to an existing bus RPC/event, so the client wires straight on
 | **Model relay** — toggle, upstream, routing, budget, guardrails | `config.get` / `config.set` (`config.relay.*`) |
 | **Traffic detail** — body, tokens, rewrite trail | `traffic.detail` |
 | **Plugins** — remote toggles, unpair | `plugin.list` / `plugin.toggle` |
-| **Pair** — scan QR | `desktopproxy://pair?d=…` payload (instanceId, NATS url, JWT) |
+| **Pair** — scan QR | `dprox://pair?d=…` payload (instanceId, NATS url, JWT) |
 
 ## Notes
 
