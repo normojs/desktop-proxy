@@ -1,28 +1,27 @@
 <template>
-	<scroll-view style="flex:1">
+	<scroll-view class="page" style="flex:1">
 		<view class="wrap">
-			<text class="h1">流量</text>
+			<text class="h1" style="margin-bottom:16px;">流量</text>
 
 			<view v-if="!connected" class="card">
-				<text class="muted">{{ errText }}</text>
-				<button class="btn" type="primary" @click="goPair">去配对</button>
+				<text class="muted" style="margin-bottom:12px;">{{ errText }}</text>
+				<button class="btn-blue" @click="goPair">去配对</button>
 			</view>
 
 			<view v-else>
-				<view v-if="items.length == 0" class="card">
-					<text class="muted">暂无调用记录</text>
-				</view>
+				<view v-if="items.length == 0" class="card"><text class="muted">暂无调用记录</text></view>
 				<view v-for="(it, idx) in items" :key="idx" class="item">
-					<view class="itop">
-						<text class="model">{{ it.model }}</text>
-						<text class="cost">{{ it.cost }}</text>
+					<view :class="it.ok ? 'dot-green' : 'dot-red'"></view>
+					<view class="flex1" style="margin-left:10px;">
+						<text class="title">{{ it.model }}</text>
+						<text class="muted-sm" style="margin-top:2px;">{{ it.sub }}</text>
 					</view>
-					<view class="ibot">
-						<text class="sub">{{ it.line }}</text>
-						<text class="sub">{{ it.t }}</text>
+					<view style="align-items:flex-end;">
+						<text class="val-blue">{{ it.cost }}</text>
+						<text class="muted-sm" style="margin-top:2px;">{{ it.tok }}</text>
 					</view>
 				</view>
-				<button class="btn" type="primary" @click="load">刷新</button>
+				<button class="btn-line" style="margin-top:6px;" @click="load">刷新</button>
 			</view>
 		</view>
 	</scroll-view>
@@ -31,16 +30,21 @@
 <script setup lang="uts">
 	import { request, isConnected } from "@/common/store.uts"
 
-	type TrafficItem = {
-		model : string
-		line : string
-		cost : string
-		t : string
-	}
+	type TItem = { model : string; sub : string; cost : string; tok : string; ok : boolean }
 
 	const connected = ref(false)
 	const errText = ref("未连接，请先配对")
-	const items = ref<TrafficItem[]>([])
+	const items = ref<TItem[]>([])
+
+	function money(v : number) : string {
+		const cents = Math.round(v * 10000)
+		const whole = Math.floor(cents / 10000)
+		let frac = (cents % 10000).toString()
+		while (frac.length < 4) {
+			frac = "0" + frac
+		}
+		return "$" + whole.toString() + "." + frac
+	}
 
 	function load() {
 		if (!isConnected()) {
@@ -52,22 +56,21 @@
 		request("traffic.list", null).then((r : any) : void => {
 			const o = JSON.parse(JSON.stringify(r)) as UTSJSONObject
 			const arr = o.getArray("items")
-			const list : TrafficItem[] = []
+			const list : TItem[] = []
 			if (arr != null) {
 				for (let i = 0; i < arr!.length; i++) {
 					const e = arr![i] as UTSJSONObject
-					const status = (e.getNumber("status") ?? 0).toString()
-					const service = e.getString("service") ?? ""
-					const model = e.getString("model") ?? "?"
-					const cost = e.getNumber("costUsd")
-					const tokens = e.getNumber("totalTokens")
+					const st = (e.getNumber("status") ?? 0)
 					const tRaw = e.getString("t") ?? ""
+					const c = e.getNumber("costUsd")
+					const tk = e.getNumber("totalTokens")
 					list.push({
-						model: model,
-						line: status + "  " + service + (tokens != null ? ("  " + tokens!.toString() + " tok") : ""),
-						cost: cost != null ? ("$" + cost!.toString()) : "—",
-						t: tRaw.length >= 19 ? tRaw.substring(11, 19) : tRaw
-					} as TrafficItem)
+						model: e.getString("model") ?? "?",
+						sub: (e.getString("method") ?? "") + " · " + (e.getString("service") ?? "") + " · " + (tRaw.length >= 19 ? tRaw.substring(11, 19) : tRaw),
+						cost: c != null ? money(c!) : "—",
+						tok: tk != null ? (Math.round(tk!).toString() + " tok") : "",
+						ok: st < 400
+					} as TItem)
 				}
 			}
 			items.value = list
@@ -85,69 +88,3 @@
 		uni.navigateTo({ url: "/pages/pair/pair" } as NavigateToOptions)
 	}
 </script>
-
-<style>
-	.wrap {
-		padding: 16px;
-	}
-
-	.h1 {
-		font-size: 22px;
-		font-weight: bold;
-		color: #111827;
-		margin-bottom: 14px;
-	}
-
-	.card {
-		background-color: #ffffff;
-		border-radius: 10px;
-		padding: 14px;
-		margin-bottom: 12px;
-	}
-
-	.item {
-		background-color: #ffffff;
-		border-radius: 10px;
-		padding: 12px 14px;
-		margin-bottom: 8px;
-	}
-
-	.itop {
-		flex-direction: row;
-		justify-content: space-between;
-		align-items: center;
-		margin-bottom: 4px;
-	}
-
-	.model {
-		font-size: 14px;
-		color: #111827;
-		font-weight: bold;
-	}
-
-	.cost {
-		font-size: 14px;
-		color: #2563eb;
-	}
-
-	.ibot {
-		flex-direction: row;
-		justify-content: space-between;
-		align-items: center;
-	}
-
-	.sub {
-		font-size: 12px;
-		color: #6b7280;
-	}
-
-	.muted {
-		font-size: 14px;
-		color: #6b7280;
-		margin-bottom: 12px;
-	}
-
-	.btn {
-		margin-top: 6px;
-	}
-</style>

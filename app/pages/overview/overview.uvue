@@ -1,40 +1,64 @@
 <template>
-	<scroll-view style="flex:1">
+	<scroll-view class="page" style="flex:1">
 		<view class="wrap">
-			<view class="head">
+			<view class="between" style="margin-bottom:16px;">
 				<text class="h1">概览</text>
-				<text class="dot" :class="connected ? 'on' : 'off'">{{ connected ? '已连接' : '未连接' }}</text>
+				<text :class="connected ? 'badge-on' : 'badge-off'">{{ connected ? '已连接' : '未连接' }}</text>
 			</view>
 
 			<view v-if="!connected" class="card">
-				<text class="muted">{{ errText }}</text>
-				<button class="btn" type="primary" @click="goPair">去配对</button>
+				<text class="muted" style="margin-bottom:12px;">{{ errText }}</text>
+				<button class="btn-blue" @click="goPair">去配对</button>
 			</view>
 
 			<view v-else>
+				<!-- 英雄成本卡 -->
 				<view class="card">
-					<view class="row">
-						<text class="label">中继</text>
-						<text class="val" :class="enabled ? 'green' : 'gray'">{{ enabled ? '开启' : '关闭' }}</text>
+					<text class="muted-sm">今日花费</text>
+					<text class="big" style="margin-top:4px;">{{ spendText }}</text>
+					<text class="muted-sm" style="margin-top:2px;">{{ budgetSub }}</text>
+					<view class="between" style="margin-top:16px;padding-top:14px;border-top:1px solid #f0f1f4;">
+						<view class="vcenter flex1">
+							<text class="stat-num">{{ reqText }}</text>
+							<text class="stat-label">请求</text>
+						</view>
+						<view class="vcenter flex1">
+							<text class="stat-num">{{ tokText }}</text>
+							<text class="stat-label">tokens</text>
+						</view>
+						<view class="vcenter flex1">
+							<text class="stat-num-green">{{ successText }}</text>
+							<text class="stat-label">成功率</text>
+						</view>
 					</view>
-					<view class="row"><text class="label">上游</text><text class="val">{{ upstream }}</text></view>
-					<view class="row"><text class="label">协议</text><text class="val">{{ upstreamApi }}</text></view>
-					<view class="row"><text class="label">Key</text><text class="val">{{ apiKeyMasked }}</text></view>
-					<view class="row"><text class="label">端口</text><text class="val">{{ port }}</text></view>
 				</view>
 
-				<view class="card">
-					<text class="ctitle">模型映射</text>
-					<text class="mono">{{ modelMapText }}</text>
+				<!-- 中继速览 -->
+				<view class="card between">
+					<view class="uni-row vcenter">
+						<view class="chip"><text class="chip-txt">⇄</text></view>
+						<view style="margin-left:12px;">
+							<text class="title">模型中继</text>
+							<text class="muted-sm" style="margin-top:3px;">{{ relaySub }}</text>
+						</view>
+					</view>
+					<text :class="enabled ? 'badge-on' : 'badge-off'">{{ enabled ? '开启' : '关闭' }}</text>
 				</view>
 
-				<view class="card">
-					<view class="row"><text class="label">花费</text><text class="val">{{ budgetText }}</text></view>
-					<view class="row"><text class="label">路由 / 护栏</text><text class="val">{{ routesText }}</text></view>
+				<!-- 实时流量 -->
+				<text class="section" style="margin-top:6px;">实时流量</text>
+				<view v-if="recent.length == 0" class="card"><text class="muted">暂无调用</text></view>
+				<view v-for="(it, idx) in recent" :key="idx" class="item">
+					<view class="dot-green"></view>
+					<view class="flex1" style="margin-left:10px;">
+						<text class="title">{{ it.model }}</text>
+						<text class="muted-sm" style="margin-top:2px;">{{ it.sub }}</text>
+					</view>
+					<text class="val-blue">{{ it.cost }}</text>
 				</view>
 
-				<button class="btn" type="primary" @click="load">刷新</button>
-				<button class="btn" type="default" @click="goPair">重新配对</button>
+				<button class="btn-line" style="margin-top:8px;" @click="load">刷新</button>
+				<button class="btn-line" style="margin-top:10px;" @click="goPair">重新配对</button>
 			</view>
 		</view>
 	</scroll-view>
@@ -43,16 +67,29 @@
 <script setup lang="uts">
 	import { request, isConnected } from "@/common/store.uts"
 
+	type RecItem = { model : string; sub : string; cost : string }
+
 	const connected = ref(false)
 	const errText = ref("未连接，请先配对")
 	const enabled = ref(false)
-	const upstream = ref("")
-	const upstreamApi = ref("")
-	const apiKeyMasked = ref("")
-	const port = ref("")
-	const modelMapText = ref("{}")
-	const budgetText = ref("无预算")
-	const routesText = ref("0 / 0")
+	const relaySub = ref("")
+	const budgetSub = ref("未设预算")
+	const spendText = ref("$0.0000")
+	const reqText = ref("0")
+	const tokText = ref("0")
+	const successText = ref("—")
+	const recent = ref<RecItem[]>([])
+
+	// 金额格式化（避免依赖 toFixed），保留 4 位小数。
+	function money(v : number) : string {
+		const cents = Math.round(v * 10000)
+		const whole = Math.floor(cents / 10000)
+		let frac = (cents % 10000).toString()
+		while (frac.length < 4) {
+			frac = "0" + frac
+		}
+		return "$" + whole.toString() + "." + frac
+	}
 
 	function load() {
 		if (!isConnected()) {
@@ -61,22 +98,56 @@
 			return
 		}
 		connected.value = true
+
 		request("relay.summary", null).then((r : any) : void => {
 			const o = JSON.parse(JSON.stringify(r)) as UTSJSONObject
 			enabled.value = o.getBoolean("enabled") == true
-			upstream.value = o.getString("upstream") ?? "—"
-			upstreamApi.value = o.getString("upstreamApi") ?? "—"
-			apiKeyMasked.value = o.getString("apiKeyMasked") ?? "—"
-			port.value = (o.getNumber("port") ?? 0).toString()
-			const mm = o.getJSON("modelMap")
-			modelMapText.value = mm != null ? JSON.stringify(mm!) : "{}"
-			routesText.value = (o.getNumber("routes") ?? 0).toString() + " / " + (o.getNumber("guardrails") ?? 0).toString()
+			const up = o.getString("upstream") ?? "—"
+			const host = up.replace("https://", "").replace("http://", "")
+			relaySub.value = host + " · :" + (o.getNumber("port") ?? 0).toString()
 			const b = o.getJSON("budget")
-			budgetText.value = b != null ? ("今日 $" + ((b!.getNumber("daySpent") ?? 0).toString())) : "无预算"
-		}).catch((e : any) : void => {
-			errText.value = "查询失败: " + e
-			connected.value = false
-		})
+			budgetSub.value = b != null ? ("每日预算 $" + ((b!.getNumber("dailyUsd") ?? 0).toString())) : "未设预算"
+		}).catch((e : any) : void => {})
+
+		request("traffic.list", null).then((r : any) : void => {
+			const o = JSON.parse(JSON.stringify(r)) as UTSJSONObject
+			const arr = o.getArray("items")
+			let cost = 0.0
+			let tok = 0.0
+			let ok = 0
+			let n = 0
+			const rec : RecItem[] = []
+			if (arr != null) {
+				n = arr!.length
+				for (let i = 0; i < arr!.length; i++) {
+					const e = arr![i] as UTSJSONObject
+					const c = e.getNumber("costUsd")
+					if (c != null) {
+						cost += c!
+					}
+					const t = e.getNumber("totalTokens")
+					if (t != null) {
+						tok += t!
+					}
+					if ((e.getNumber("status") ?? 0) < 400) {
+						ok += 1
+					}
+					if (i < 3) {
+						const tRaw = e.getString("t") ?? ""
+						rec.push({
+							model: e.getString("model") ?? "?",
+							sub: (e.getString("method") ?? "") + " · " + (tRaw.length >= 19 ? tRaw.substring(11, 19) : tRaw),
+							cost: c != null ? money(c!) : "—"
+						} as RecItem)
+					}
+				}
+			}
+			spendText.value = money(cost)
+			reqText.value = n.toString()
+			tokText.value = Math.round(tok).toString()
+			successText.value = n > 0 ? (Math.round(ok * 100 / n).toString() + "%") : "—"
+			recent.value = rec
+		}).catch((e : any) : void => {})
 	}
 
 	onShow(() => {
@@ -87,92 +158,3 @@
 		uni.navigateTo({ url: "/pages/pair/pair" } as NavigateToOptions)
 	}
 </script>
-
-<style>
-	.wrap {
-		padding: 16px;
-	}
-
-	.head {
-		flex-direction: row;
-		align-items: center;
-		justify-content: space-between;
-		margin-bottom: 14px;
-	}
-
-	.h1 {
-		font-size: 22px;
-		font-weight: bold;
-		color: #111827;
-	}
-
-	.dot {
-		font-size: 12px;
-		padding: 3px 10px;
-		border-radius: 10px;
-	}
-
-	.dot.on {
-		color: #047857;
-		background-color: #d1fae5;
-	}
-
-	.dot.off {
-		color: #6b7280;
-		background-color: #e5e7eb;
-	}
-
-	.card {
-		background-color: #ffffff;
-		border-radius: 10px;
-		padding: 14px;
-		margin-bottom: 12px;
-	}
-
-	.row {
-		flex-direction: row;
-		justify-content: space-between;
-		align-items: center;
-		padding: 6px 0;
-	}
-
-	.label {
-		font-size: 14px;
-		color: #6b7280;
-	}
-
-	.val {
-		font-size: 14px;
-		color: #111827;
-	}
-
-	.val.green {
-		color: #047857;
-	}
-
-	.val.gray {
-		color: #9ca3af;
-	}
-
-	.ctitle {
-		font-size: 13px;
-		color: #6b7280;
-		margin-bottom: 6px;
-	}
-
-	.mono {
-		font-size: 13px;
-		color: #111827;
-	}
-
-	.muted {
-		font-size: 14px;
-		color: #6b7280;
-		margin-bottom: 12px;
-	}
-
-	.btn {
-		margin-top: 6px;
-		margin-bottom: 6px;
-	}
-</style>

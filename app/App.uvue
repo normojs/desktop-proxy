@@ -40,12 +40,55 @@
 </script>
 
 <style>
-	/*每个页面公共css */
-	.uni-row {
-		flex-direction: row;
-	}
+	/* ===== dprox 全局共享样式（浅色专业风，对齐设计稿）===== */
+	.uni-row { flex-direction: row; }
+	.uni-column { flex-direction: column; }
 
-	.uni-column {
-		flex-direction: column;
-	}
+	/* 布局 */
+	.page { flex: 1; background-color: #f4f5f7; }
+	.wrap { padding: 16px; }
+	.between { flex-direction: row; justify-content: space-between; align-items: center; }
+	.vcenter { align-items: center; }
+	.flex1 { flex: 1; }
+
+	/* 文字（只能用于 text / button） */
+	.h1 { font-size: 22px; font-weight: bold; color: #111827; }
+	.h2 { font-size: 18px; font-weight: bold; color: #111827; }
+	.title { font-size: 14px; font-weight: bold; color: #111827; }
+	.muted { font-size: 13px; color: #6b7280; }
+	.muted-sm { font-size: 12px; color: #6b7280; }
+	.section { font-size: 12px; color: #6b7280; margin-bottom: 6px; margin-left: 2px; }
+	.label { font-size: 13px; color: #6b7280; }
+	.val { font-size: 13px; color: #111827; }
+	.val-green { font-size: 13px; color: #16a34a; }
+	.val-gray { font-size: 13px; color: #9ca3af; }
+	.val-blue { font-size: 13px; color: #2563eb; }
+	.big { font-size: 34px; font-weight: bold; color: #111827; }
+	.stat-num { font-size: 17px; font-weight: bold; color: #111827; }
+	.stat-num-green { font-size: 17px; font-weight: bold; color: #16a34a; }
+	.stat-label { font-size: 11px; color: #6b7280; }
+
+	/* 卡片 */
+	.card { background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 16px; margin-bottom: 14px; }
+	.row { flex-direction: row; justify-content: space-between; align-items: center; padding-top: 7px; padding-bottom: 7px; }
+	.rowb { flex-direction: row; justify-content: space-between; align-items: center; padding-top: 11px; padding-bottom: 11px; border-bottom: 1px solid #f0f1f4; }
+
+	/* 列表项 */
+	.item { flex-direction: row; align-items: center; background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 12px 14px; margin-bottom: 8px; }
+
+	/* 胶囊 / 徽章 / 图标块 / 圆点 */
+	.pill { font-size: 12px; color: #2563eb; background-color: #eef2ff; border-radius: 6px; padding: 3px 8px; }
+	.pill-gray { font-size: 12px; color: #374151; background-color: #f3f4f6; border-radius: 6px; padding: 3px 8px; }
+	.badge-on { font-size: 12px; color: #16a34a; background-color: #d1fae5; border-radius: 10px; padding: 3px 10px; }
+	.badge-off { font-size: 12px; color: #6b7280; background-color: #e5e7eb; border-radius: 10px; padding: 3px 10px; }
+	.chip { width: 38px; height: 38px; border-radius: 12px; background-color: #eef2ff; align-items: center; justify-content: center; }
+	.chip-txt { font-size: 18px; color: #2563eb; }
+	.dot-green { width: 8px; height: 8px; border-radius: 4px; background-color: #16a34a; }
+	.dot-red { width: 8px; height: 8px; border-radius: 4px; background-color: #dc2626; }
+	.arrow { font-size: 13px; color: #9ca3af; }
+
+	/* 按钮 */
+	.btn-dark { background-color: #111827; color: #ffffff; font-size: 14px; font-weight: bold; border-radius: 14px; height: 48px; line-height: 48px; }
+	.btn-blue { background-color: #2563eb; color: #ffffff; font-size: 14px; font-weight: bold; border-radius: 14px; height: 48px; line-height: 48px; }
+	.btn-line { background-color: #ffffff; color: #374151; font-size: 14px; font-weight: bold; border: 1px solid #e5e7eb; border-radius: 14px; height: 48px; line-height: 48px; }
 </style>
