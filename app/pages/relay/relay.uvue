@@ -1,5 +1,5 @@
 <template>
-	<scroll-view class="page" style="flex:1">
+	<scroll-view class="page" :class="isDark ? 'theme-dark' : 'theme-light'" style="flex:1">
 		<view class="wrap">
 			<text class="h1" style="margin-bottom:16px;">中继配置</text>
 
@@ -54,8 +54,11 @@
 
 <script setup lang="uts">
 	import { request, isConnected } from "@/common/store.uts"
+	import { isDarkNow, applyChrome } from "@/common/theme.uts"
 
 	type MapRow = { from : string; to : string }
+
+	const isDark = ref(false)
 
 	const connected = ref(false)
 	const errText = ref("未连接，请先配对")
@@ -111,6 +114,8 @@
 	}
 
 	onShow(() => {
+		isDark.value = isDarkNow()
+		applyChrome(isDark.value)
 		load()
 	})
 

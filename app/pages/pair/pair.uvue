@@ -1,5 +1,5 @@
 <template>
-	<scroll-view class="page" style="flex:1">
+	<scroll-view class="page" :class="isDark ? 'theme-dark' : 'theme-light'" style="flex:1">
 		<view class="pairwrap">
 			<view class="logo"><text class="logo-txt">d</text></view>
 			<text class="pair-title">配对桌面</text>
@@ -16,9 +16,16 @@
 
 <script setup lang="uts">
 	import { connect, setStateListener } from "@/common/store.uts"
+	import { isDarkNow, applyChrome } from "@/common/theme.uts"
 
 	const link = ref("")
 	const status = ref("未连接")
+	const isDark = ref(false)
+
+	onShow(() => {
+		isDark.value = isDarkNow()
+		applyChrome(isDark.value)
+	})
 
 	const onConnect = () => {
 		status.value = "连接中…"
@@ -63,13 +70,13 @@
 	.pair-title {
 		font-size: 24px;
 		font-weight: bold;
-		color: #111827;
+		color: var(--text);
 		margin-top: 18px;
 	}
 
 	.pair-sub {
 		font-size: 13px;
-		color: #6b7280;
+		color: var(--muted);
 		text-align: center;
 		margin-top: 8px;
 		line-height: 1.5em;
@@ -77,12 +84,13 @@
 
 	.pair-input {
 		width: 100%;
-		border: 1px solid #d1d5db;
+		border: 1px solid var(--input-border);
 		border-radius: 12px;
 		padding: 12px;
 		height: 100px;
 		font-size: 13px;
-		background-color: #ffffff;
+		color: var(--text);
+		background-color: var(--card);
 		margin-top: 28px;
 	}
 
@@ -93,13 +101,13 @@
 
 	.state {
 		font-size: 14px;
-		color: #2563eb;
+		color: var(--blue);
 		margin-top: 16px;
 	}
 
 	.pair-foot {
 		font-size: 12px;
-		color: #6b7280;
+		color: var(--muted);
 		margin-top: 40px;
 	}
 </style>

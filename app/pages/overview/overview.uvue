@@ -1,5 +1,5 @@
 <template>
-	<scroll-view class="page" style="flex:1">
+	<scroll-view class="page" :class="isDark ? 'theme-dark' : 'theme-light'" style="flex:1">
 		<view class="wrap">
 			<view class="between" style="margin-bottom:16px;">
 				<text class="h1">概览</text>
@@ -59,6 +59,7 @@
 
 				<button class="btn-line" style="margin-top:8px;" @click="load">刷新</button>
 				<button class="btn-line" style="margin-top:10px;" @click="goPair">重新配对</button>
+				<button class="btn-line" style="margin-top:10px;" @click="toggleTheme">主题：{{ themeLabel }}</button>
 			</view>
 		</view>
 	</scroll-view>
@@ -66,8 +67,12 @@
 
 <script setup lang="uts">
 	import { request, isConnected } from "@/common/store.uts"
+	import { isDarkNow, cycleTheme, themeMode, applyChrome } from "@/common/theme.uts"
 
 	type RecItem = { model : string; sub : string; cost : string }
+
+	const isDark = ref(false)
+	const themeLabel = ref("跟随系统")
 
 	const connected = ref(false)
 	const errText = ref("未连接，请先配对")
@@ -151,10 +156,20 @@
 	}
 
 	onShow(() => {
+		isDark.value = isDarkNow()
+		themeLabel.value = themeMode()
+		applyChrome(isDark.value)
 		load()
 	})
 
 	const goPair = () => {
 		uni.navigateTo({ url: "/pages/pair/pair" } as NavigateToOptions)
+	}
+
+	const toggleTheme = () => {
+		cycleTheme()
+		isDark.value = isDarkNow()
+		themeLabel.value = themeMode()
+		applyChrome(isDark.value)
 	}
 </script>
