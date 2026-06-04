@@ -24,14 +24,16 @@
 					<view class="row"><text class="label">API Key</text><text class="val">{{ apiKeyMasked }}</text></view>
 				</view>
 
-				<text class="section">模型路由</text>
+				<text class="section">模型路由 · 配置（点目标切换，影响之后的调用）</text>
 				<view class="card">
 					<view v-if="modelRows.length == 0"><text class="muted">无</text></view>
-					<view v-for="(m, idx) in modelRows" :key="idx" class="uni-row vcenter" style="padding-top:5px;padding-bottom:5px;">
+					<view v-for="(m, idx) in modelRows" :key="idx" class="uni-row vcenter" style="padding-top:6px;padding-bottom:6px;" @click="cycleModel(idx)">
 						<text class="pill-gray">{{ m.from }}</text>
 						<text class="arrow" style="margin-left:8px;margin-right:8px;">→</text>
 						<text class="pill">{{ m.to }}</text>
+						<text class="muted-sm" style="margin-left:auto;">切换 ›</text>
 					</view>
+					<text v-if="ctrlMsg != ''" class="val-blue" style="margin-top:8px;">{{ ctrlMsg }}</text>
 				</view>
 
 				<text class="section">预算</text>
@@ -43,7 +45,7 @@
 
 				<view class="card" style="padding-top:2px;padding-bottom:2px;">
 					<view class="rowb"><text class="label">路由 / 护栏</text><text class="val">{{ routesText }}</text></view>
-					<view class="row"><text class="label">中继开关</text><text class="val-gray">下一步（config.set）</text></view>
+					<view class="row"><text class="label">远程控制</text><text class="val-green">已启用（点上方模型切换）</text></view>
 				</view>
 
 				<button class="btn-line" @click="load">刷新</button>
@@ -53,7 +55,7 @@
 </template>
 
 <script setup lang="uts">
-	import { request, isConnected } from "@/common/store.uts"
+	import { request, isConnected, autoConnect, savedLink } from "@/common/store.uts"
 	import { isDarkNow, applyChrome } from "@/common/theme.uts"
 
 	type MapRow = { from : string; to : string }
@@ -71,6 +73,9 @@
 	const monthlyText = ref("无")
 	const spentText = ref("—")
 	const routesText = ref("0 / 0")
+	const ctrlMsg = ref("")
+
+	const PRESETS : string[] = ["deepseek-v4-flash", "deepseek-v4-proz", "deepseek-reasoner"]
 
 	function load() {
 		if (!isConnected()) {
@@ -116,10 +121,62 @@
 	onShow(() => {
 		isDark.value = isDarkNow()
 		applyChrome(isDark.value, true)
-		load()
+		if (isConnected()) {
+			load()
+		} else {
+			connected.value = false
+			errText.value = "连接中…"
+			const started = autoConnect((s : string) : void => {
+				errText.value = s
+				if (s.indexOf("authed") >= 0) {
+					load()
+				}
+			})
+			if (!started && savedLink() == "") {
+				errText.value = "未连接，请先配对"
+			}
+		}
 	})
 
 	const goPair = () => {
 		uni.navigateTo({ url: "/pages/pair/pair" } as NavigateToOptions)
+	}
+
+	function nextModel(cur : string) : string {
+		for (let i = 0; i < PRESETS.length; i++) {
+			if (PRESETS[i] == cur) {
+				return PRESETS[(i + 1) % PRESETS.length]
+			}
+		}
+		return PRESETS[0]
+	}
+
+	// 点击某条路由 → 切换目标模型 → config.set 实时下发到桌面。
+	const cycleModel = (idx : number) => {
+		const rows = modelRows.value
+		const newRows : MapRow[] = []
+		for (let i = 0; i < rows.length; i++) {
+			if (i == idx) {
+				newRows.push({ from: rows[i].from, to: nextModel(rows[i].to) } as MapRow)
+			} else {
+				newRows.push(rows[i])
+			}
+		}
+		modelRows.value = newRows
+
+		let mm = "{"
+		for (let i = 0; i < newRows.length; i++) {
+			if (i > 0) {
+				mm += ","
+			}
+			mm += "\"" + newRows[i].from + "\":\"" + newRows[i].to + "\""
+		}
+		mm += "}"
+		ctrlMsg.value = "更新中…"
+		request("config.set", JSON.parseObject("{\"relay\":{\"modelMap\":" + mm + "}}")).then((_r : any) : void => {
+			ctrlMsg.value = "已应用到桌面 ✓"
+		}).catch((e : any) : void => {
+			ctrlMsg.value = "失败: " + e
+		})
 	}
 </script>

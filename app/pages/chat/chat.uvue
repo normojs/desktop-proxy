@@ -26,7 +26,7 @@
 </template>
 
 <script setup lang="uts">
-	import { request, isConnected, setSelSession } from "@/common/store.uts"
+	import { request, isConnected, setSelSession, autoConnect, savedLink } from "@/common/store.uts"
 	import { isDarkNow, applyChrome } from "@/common/theme.uts"
 
 	type SItem = { key : string; title : string; sub : string }
@@ -81,7 +81,21 @@
 	onShow(() => {
 		isDark.value = isDarkNow()
 		applyChrome(isDark.value, true)
-		load()
+		if (isConnected()) {
+			load()
+		} else {
+			connected.value = false
+			errText.value = "连接中…"
+			const started = autoConnect((s : string) : void => {
+				errText.value = s
+				if (s.indexOf("authed") >= 0) {
+					load()
+				}
+			})
+			if (!started && savedLink() == "") {
+				errText.value = "未连接，请先配对"
+			}
+		}
 	})
 
 	const goPair = () => {

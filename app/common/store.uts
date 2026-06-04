@@ -62,9 +62,50 @@ export function connect(link : string) : string {
 			stateListener!(state)
 		}
 	}
+	saveLink(link) // 持久化，下次启动自动重连
 	conn = new NatsConnection(pp.wsUrl!, pp.jwt!, pp.instanceId, clientId, signFn, onState, 15000)
 	conn!.connect()
 	return ""
+}
+
+// ── 配对持久化（本地存储）──────────────────────────────────────────
+const PAIR_KEY = "dprox_pair_link"
+
+function saveLink(link : string) : void {
+	uni.setStorageSync(PAIR_KEY, link)
+}
+
+export function savedLink() : string {
+	const v = uni.getStorageSync(PAIR_KEY)
+	if (v == null) {
+		return ""
+	}
+	return v as string
+}
+
+export function clearPairing() : void {
+	uni.removeStorageSync(PAIR_KEY)
+	conn = null
+	state = "未连接"
+	pairing = null
+}
+
+// 用已保存的配对自动重连。已在连接/连接中则不重复。返回是否发起了连接。
+export function autoConnect(onState : (s : string) => void) : boolean {
+	if (conn != null) {
+		return false
+	}
+	const link = savedLink()
+	if (link == "") {
+		return false
+	}
+	setStateListener(onState)
+	const err = connect(link)
+	if (err != "") {
+		setStateListener(null)
+		return false
+	}
+	return true
 }
 
 // 调用一个远程 RPC（如 relay.summary）。未连接则 reject。

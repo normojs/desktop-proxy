@@ -46,7 +46,7 @@
 				</view>
 
 				<!-- 实时流量 -->
-				<text class="section" style="margin-top:6px;">实时流量</text>
+				<text class="section" style="margin-top:6px;">实时流量 · 历史（实际发生）</text>
 				<view v-if="recent.length == 0" class="card"><text class="muted">暂无调用</text></view>
 				<view v-for="(it, idx) in recent" :key="idx" class="item">
 					<view class="dot-green"></view>
@@ -66,7 +66,7 @@
 </template>
 
 <script setup lang="uts">
-	import { request, isConnected } from "@/common/store.uts"
+	import { request, isConnected, autoConnect, savedLink } from "@/common/store.uts"
 	import { isDarkNow, cycleTheme, themeMode, applyChrome } from "@/common/theme.uts"
 
 	type RecItem = { model : string; sub : string; cost : string }
@@ -109,7 +109,18 @@
 			enabled.value = o.getBoolean("enabled") == true
 			const up = o.getString("upstream") ?? "—"
 			const host = up.replace("https://", "").replace("http://", "")
-			relaySub.value = host + " · :" + (o.getNumber("port") ?? 0).toString()
+			const portStr = (o.getNumber("port") ?? 0).toString()
+			const mm = o.getJSON("modelMap")
+			let firstModel = ""
+			if (mm != null) {
+				const m = mm!.toMap()
+				m.forEach((v : any, k : string) : void => {
+					if (firstModel == "") {
+						firstModel = v as string
+					}
+				})
+			}
+			relaySub.value = host + " · :" + portStr + (firstModel != "" ? ("  →  " + firstModel) : "")
 			const b = o.getJSON("budget")
 			budgetSub.value = b != null ? ("每日预算 $" + ((b!.getNumber("dailyUsd") ?? 0).toString())) : "未设预算"
 		}).catch((e : any) : void => {})
@@ -159,7 +170,21 @@
 		isDark.value = isDarkNow()
 		themeLabel.value = themeMode()
 		applyChrome(isDark.value, true)
-		load()
+		if (isConnected()) {
+			load()
+		} else {
+			connected.value = false
+			errText.value = "连接中…"
+			const started = autoConnect((s : string) : void => {
+				errText.value = s
+				if (s.indexOf("authed") >= 0) {
+					load()
+				}
+			})
+			if (!started && savedLink() == "") {
+				errText.value = "未连接，请先配对"
+			}
+		}
 	})
 
 	const goPair = () => {

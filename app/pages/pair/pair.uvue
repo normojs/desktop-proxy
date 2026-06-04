@@ -7,6 +7,7 @@
 
 			<textarea class="pair-input" v-model="link" placeholder="dprox://pair?d=..." />
 			<button class="btn-blue pair-btn" @click="onConnect">连接</button>
+			<button class="btn-line pair-btn" @click="onClear">清除已保存配对</button>
 			<text class="state">{{ status }}</text>
 
 			<text class="pair-foot">🔒 经你自建的 NATS 服务器端到端</text>
@@ -15,7 +16,7 @@
 </template>
 
 <script setup lang="uts">
-	import { connect, setStateListener } from "@/common/store.uts"
+	import { connect, setStateListener, clearPairing, savedLink } from "@/common/store.uts"
 	import { isDarkNow, applyChrome } from "@/common/theme.uts"
 
 	const link = ref("")
@@ -25,7 +26,16 @@
 	onShow(() => {
 		isDark.value = isDarkNow()
 		applyChrome(isDark.value, false)
+		if (link.value == "") {
+			link.value = savedLink() // 回填已保存的配对，便于查看/编辑
+		}
 	})
+
+	const onClear = () => {
+		clearPairing()
+		link.value = ""
+		status.value = "已清除保存的配对"
+	}
 
 	const onConnect = () => {
 		status.value = "连接中…"
