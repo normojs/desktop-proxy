@@ -13,9 +13,11 @@ A native phone app (**Android / iOS / HarmonyOS**, uni-app x) that **observes an
 controls** the desktop-proxy *relay* over a NATS remote bus: live token cost &
 traffic, relay configuration, a reconstructed view of the AI IDE's conversation,
 and plugin toggles. The **desktop + server backend is already built and shipped**;
-the **shared hard logic is written and unit-tested** and vendored here. What's left
-is the uni-app x native transport (an ed25519 plugin + a NATS-over-WebSocket client)
-and the `.uvue` screens.
+the **shared hard logic is written and unit-tested** and vendored here.
+
+**P1 transport is now ported to `.uts` and H5-verified** (see below). What's left is
+the **native ed25519 plugin** (`uts-nkeys`, to replace the H5 `tweetnacl` signer),
+**Android/iOS verification**, and the remaining `.uvue` screens (Overview/Relay/Chat).
 
 ## First steps (fresh session, after Cursor reload)
 
@@ -43,6 +45,21 @@ observe-first app first (see P4 in `docs/remote-app-plan.md`).
 - ✅ **`.cursor/`** — official DCloud uni-app x rules + `@dcloudio/uni-app-x-mcp`.
 - ✅ **`docs/`** — UI design (`docs/ui/remote-control.html` light + `-dark.html`,
   7 screens) and the architecture/phasing plan (`docs/remote-app-plan.md`).
+- ✅ **P1 transport (this session)** — `app/common/dprox-core/*.uts` ports of
+  `util`, `nkey`, `subjects` (+`pairingFromString`), `nats-protocol` (`NatsParser`
+  + serializers), `bus-client`, plus `connection.uts` (NATS-over-WS via uni global
+  socket API). All exercised by the `pages/index/index.uvue` self-check and **verified
+  running on H5**. ed25519 on H5 uses **`tweetnacl`** (`npm` in `app/`, `#ifdef H5`);
+  native uses the `uts-nkeys` plugin (TODO). The connect screen takes a pairing link →
+  signs the nonce → `relay.summary`.
+- ✅ **Desktop daemon remote bus** — `dprox relay daemon` now hosts the remote bus
+  (`relay.summary`/`config.get` over NATS) when `config.remote` is enabled, so the
+  phone connects **without injection** (correct for config-redirect Codex).
+- ⚠️ **H5 ≠ native** — H5 (JS, lenient) passing does **not** prove Android/iOS
+  (Kotlin/Swift, strict static types). Watch **Int vs Double** in bit-ops/array
+  indexing and **array out-of-bounds** (native throws; H5 returns undefined). The
+  `.uts` was written conservatively for this; still do a full **Android** compile/run
+  of `dprox-core` at the milestone before calling it done.
 - ⬜ **App code** — not started (this is the work).
 
 ## What the app does (features)

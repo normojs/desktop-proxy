@@ -101,7 +101,9 @@ relay itself; the IDE core re-reads its own config on launch).
    IDE (Codex) needs: write its config + run the daemon. Records to
    `log/relay-daemon.ndjson`, and serves a **local dashboard** (traffic + token/cost
    by model) at `http://127.0.0.1:<relayPort+1>` (set `relay.uiPort: 0` to disable).
-   Cross-platform by construction.
+   When `config.remote` is enabled it also **hosts the remote bus over NATS**
+   (`relay.summary`, `config.get`) so a phone/CLI can connect and watch this relay
+   **without any injection** — the right path for Codex. Cross-platform by construction.
 2. **In the injected runtime** — when you've run `dprox install`, the relay also
    runs inside the app (config-gated by `config.relay`) and feeds the in-app
    Network inspector + bus. Use this for in-process IDEs (Cursor) and the GUI.
