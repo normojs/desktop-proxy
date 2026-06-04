@@ -23,6 +23,7 @@ import type { RouteRule } from "./net/route.js";
 import type { GuardRule } from "./net/guardrails.js";
 import { createBudgetTracker, type BudgetConfig } from "./net/budget.js";
 import { startRelayUi, type UiEntry } from "./net/relay-ui.js";
+import { startDaemonRemoteBus, type DaemonBus } from "./daemon-bus.js";
 
 const USER_ROOT = join(homedir(), ".desktop-proxy");
 const LOG_DIR = join(USER_ROOT, "log");
@@ -167,9 +168,20 @@ async function main(): Promise<void> {
     }
   }
 
+  // Remote bus (NATS) — lets a phone/CLI reach relay.summary WITHOUT injection.
+  // The right path for config-redirect IDEs (Codex). No-op unless config.remote
+  // is enabled. Failures are non-fatal: the daemon keeps relaying locally.
+  let remoteBus: DaemonBus | null = null;
+  try {
+    remoteBus = await startDaemonRemoteBus({ relayPort, log });
+  } catch (e) {
+    log("warn", "remote bus failed:", String(e));
+  }
+
   const shutdown = () => {
     log("info", "shutting down");
     uiServer?.close();
+    void remoteBus?.close();
     void handle.close().finally(() => {
       writer.close();
       process.exit(0);
