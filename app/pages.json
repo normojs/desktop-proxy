@@ -25,6 +25,18 @@
 			}
 		},
 		{
+			"path": "pages/chat/chat",
+			"style": {
+				"navigationBarTitleText": "会话"
+			}
+		},
+		{
+			"path": "pages/conversation/conversation",
+			"style": {
+				"navigationBarTitleText": "对话"
+			}
+		},
+		{
 			"path": "pages/pair/pair",
 			"style": {
 				"navigationBarTitleText": "配对"
@@ -48,6 +60,10 @@
 			{
 				"pagePath": "pages/traffic/traffic",
 				"text": "流量"
+			},
+			{
+				"pagePath": "pages/chat/chat",
+				"text": "会话"
 			}
 		]
 	},

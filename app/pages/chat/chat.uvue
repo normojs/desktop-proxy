@@ -1,0 +1,95 @@
+<template>
+	<scroll-view class="page" :class="isDark ? 'theme-dark' : 'theme-light'" style="flex:1">
+		<view class="wrap">
+			<text class="h1" style="margin-bottom:16px;">会话</text>
+
+			<view v-if="!connected" class="card">
+				<text class="muted" style="margin-bottom:12px;">{{ errText }}</text>
+				<button class="btn-blue" @click="goPair">去配对</button>
+			</view>
+
+			<view v-else>
+				<view v-if="sessions.length == 0" class="card">
+					<text class="muted">暂无会话（AI IDE 发起对话后出现）</text>
+				</view>
+				<view v-for="(s, idx) in sessions" :key="idx" class="item" @click="open(s.key)">
+					<view class="flex1">
+						<text class="title">{{ s.title }}</text>
+						<text class="muted-sm" style="margin-top:3px;">{{ s.sub }}</text>
+					</view>
+					<text class="arrow">›</text>
+				</view>
+				<button class="btn-line" style="margin-top:6px;" @click="load">刷新</button>
+			</view>
+		</view>
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	import { request, isConnected, setSelSession } from "@/common/store.uts"
+	import { isDarkNow, applyChrome } from "@/common/theme.uts"
+
+	type SItem = { key : string; title : string; sub : string }
+
+	const isDark = ref(false)
+	const connected = ref(false)
+	const errText = ref("未连接，请先配对")
+	const sessions = ref<SItem[]>([])
+
+	function money(v : number) : string {
+		const cents = Math.round(v * 10000)
+		const whole = Math.floor(cents / 10000)
+		let frac = (cents % 10000).toString()
+		while (frac.length < 4) {
+			frac = "0" + frac
+		}
+		return "$" + whole.toString() + "." + frac
+	}
+
+	function load() {
+		if (!isConnected()) {
+			connected.value = false
+			errText.value = "未连接，请先配对"
+			return
+		}
+		connected.value = true
+		request("chat.sessions", null).then((r : any) : void => {
+			const o = JSON.parse(JSON.stringify(r)) as UTSJSONObject
+			const arr = o.getArray("sessions")
+			const list : SItem[] = []
+			if (arr != null) {
+				for (let i = 0; i < arr!.length; i++) {
+					const e = arr![i] as UTSJSONObject
+					const model = e.getString("model") ?? "?"
+					const turns = Math.round(e.getNumber("turnCount") ?? 0)
+					const cost = e.getNumber("totalCostUsd")
+					const tRaw = e.getString("lastActivity") ?? ""
+					list.push({
+						key: e.getString("key") ?? "",
+						title: e.getString("title") ?? "(无标题)",
+						sub: model + " · " + turns.toString() + " 轮" + (cost != null ? (" · " + money(cost!)) : "") + (tRaw.length >= 19 ? (" · " + tRaw.substring(11, 19)) : "")
+					} as SItem)
+				}
+			}
+			sessions.value = list
+		}).catch((e : any) : void => {
+			errText.value = "查询失败: " + e
+			connected.value = false
+		})
+	}
+
+	onShow(() => {
+		isDark.value = isDarkNow()
+		applyChrome(isDark.value, true)
+		load()
+	})
+
+	const goPair = () => {
+		uni.navigateTo({ url: "/pages/pair/pair" } as NavigateToOptions)
+	}
+
+	const open = (key : string) => {
+		setSelSession(key)
+		uni.navigateTo({ url: "/pages/conversation/conversation" } as NavigateToOptions)
+	}
+</script>

@@ -1,0 +1,144 @@
+<template>
+	<scroll-view class="page" :class="isDark ? 'theme-dark' : 'theme-light'" style="flex:1">
+		<view class="wrap">
+			<text class="h1" style="margin-bottom:4px;">{{ title }}</text>
+			<text class="muted-sm" style="margin-bottom:14px;">{{ sub }}</text>
+
+			<view v-if="!loaded" class="card"><text class="muted">{{ errText }}</text></view>
+
+			<view v-else>
+				<view v-for="(t, idx) in turns" :key="idx" :class="bubbleClass(t.role)">
+					<text class="rolelabel">{{ roleLabel(t.role) }}</text>
+					<text v-if="t.text != ''" class="bubbletext">{{ t.text }}</text>
+					<text v-if="t.tools != ''" class="toolpill">🔧 {{ t.tools }}</text>
+				</view>
+			</view>
+		</view>
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	import { request, getSelSession } from "@/common/store.uts"
+	import { isDarkNow, applyChrome } from "@/common/theme.uts"
+
+	type CTurn = { role : string; text : string; tools : string }
+
+	const isDark = ref(false)
+	const loaded = ref(false)
+	const errText = ref("加载中…")
+	const title = ref("")
+	const sub = ref("")
+	const turns = ref<CTurn[]>([])
+
+	function roleLabel(role : string) : string {
+		if (role == "user") {
+			return "用户"
+		}
+		if (role == "assistant") {
+			return "助手"
+		}
+		if (role == "tool") {
+			return "工具"
+		}
+		return "系统"
+	}
+
+	function bubbleClass(role : string) : string {
+		if (role == "user") {
+			return "bubble bubble-user"
+		}
+		if (role == "assistant") {
+			return "bubble bubble-assistant"
+		}
+		if (role == "tool") {
+			return "bubble bubble-tool"
+		}
+		return "bubble bubble-system"
+	}
+
+	onShow(() => {
+		isDark.value = isDarkNow()
+		applyChrome(isDark.value, false)
+		const key = getSelSession()
+		if (key == "") {
+			errText.value = "无选中会话"
+			loaded.value = false
+			return
+		}
+		request("chat.session", key).then((r : any) : void => {
+			if (r == null) {
+				errText.value = "未找到该会话"
+				loaded.value = false
+				return
+			}
+			const o = JSON.parse(JSON.stringify(r)) as UTSJSONObject
+			title.value = o.getString("title") ?? "会话"
+			sub.value = o.getString("model") ?? ""
+			const arr = o.getArray("turns")
+			const list : CTurn[] = []
+			if (arr != null) {
+				for (let i = 0; i < arr!.length; i++) {
+					const e = arr![i] as UTSJSONObject
+					list.push({
+						role: e.getString("role") ?? "user",
+						text: e.getString("text") ?? "",
+						tools: e.getString("tools") ?? ""
+					} as CTurn)
+				}
+			}
+			turns.value = list
+			loaded.value = true
+		}).catch((e : any) : void => {
+			errText.value = "查询失败: " + e
+			loaded.value = false
+		})
+	})
+</script>
+
+<style>
+	.bubble {
+		border-radius: 12px;
+		padding: 12px;
+		margin-bottom: 10px;
+		max-width: 88%;
+	}
+
+	.bubble-user {
+		background-color: var(--blue-bg);
+		align-self: flex-end;
+	}
+
+	.bubble-assistant {
+		background-color: var(--card);
+		border: 1px solid var(--border);
+		align-self: flex-start;
+	}
+
+	.bubble-system {
+		background-color: var(--gray-bg);
+		align-self: flex-start;
+	}
+
+	.bubble-tool {
+		background-color: var(--gray-bg);
+		align-self: flex-start;
+	}
+
+	.rolelabel {
+		font-size: 11px;
+		color: var(--muted);
+		margin-bottom: 4px;
+	}
+
+	.bubbletext {
+		font-size: 14px;
+		color: var(--text);
+		line-height: 1.5em;
+	}
+
+	.toolpill {
+		font-size: 12px;
+		color: var(--blue);
+		margin-top: 6px;
+	}
+</style>

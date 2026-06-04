@@ -85,3 +85,14 @@ export function setSelTraffic(i : number) : void {
 export function getSelTraffic() : number {
 	return _selTraffic
 }
+
+// 对话页要看的会话 key（跨页传递）。
+let _selSession : string = ""
+
+export function setSelSession(k : string) : void {
+	_selSession = k
+}
+
+export function getSelSession() : string {
+	return _selSession
+}
