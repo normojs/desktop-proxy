@@ -74,3 +74,14 @@ export function request(method : string, params : any) : Promise<any> {
 	}
 	return conn!.getBus().request(method, params)
 }
+
+// 流量详情页要看的条目索引（跨页传递，避免 URL 传参）。
+let _selTraffic : number = -1
+
+export function setSelTraffic(i : number) : void {
+	_selTraffic = i
+}
+
+export function getSelTraffic() : number {
+	return _selTraffic
+}

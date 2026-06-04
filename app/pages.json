@@ -19,6 +19,12 @@
 			}
 		},
 		{
+			"path": "pages/traffic-detail/traffic-detail",
+			"style": {
+				"navigationBarTitleText": "请求详情"
+			}
+		},
+		{
 			"path": "pages/pair/pair",
 			"style": {
 				"navigationBarTitleText": "配对"

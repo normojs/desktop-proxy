@@ -36,29 +36,35 @@ export function isDarkNow() : boolean {
 }
 
 // 同步原生导航栏 + tabBar 颜色到当前主题（动态，跟随手动切换）。
-// 页面 onShow 与切换时调用。
-export function applyChrome(isDark : boolean) : void {
+// isTab=true 时才设 tabBar（setTabBarStyle 只能在 tabBar 页调用）。
+// 两个 API 都带 fail 回调，避免在不适用的页面抛出未捕获的 Promise。
+export function applyChrome(isDark : boolean, isTab : boolean) : void {
+	const navFront = isDark ? "#ffffff" : "#000000"
+	const navBg = isDark ? "#0b0d12" : "#f8f8f8"
+	uni.setNavigationBarColor({
+		frontColor: navFront,
+		backgroundColor: navBg,
+		fail: (_e : any) : void => {}
+	} as SetNavigationBarColorOptions)
+
+	if (!isTab) {
+		return
+	}
 	if (isDark) {
 		uni.setTabBarStyle({
 			color: "#8b93a1",
 			selectedColor: "#60a5fa",
 			backgroundColor: "#11141b",
-			borderStyle: "white"
+			borderStyle: "white",
+			fail: (_e : any) : void => {}
 		} as SetTabBarStyleOptions)
-		uni.setNavigationBarColor({
-			frontColor: "#ffffff",
-			backgroundColor: "#0b0d12"
-		} as SetNavigationBarColorOptions)
 	} else {
 		uni.setTabBarStyle({
 			color: "#6b7280",
 			selectedColor: "#2563eb",
 			backgroundColor: "#ffffff",
-			borderStyle: "black"
+			borderStyle: "black",
+			fail: (_e : any) : void => {}
 		} as SetTabBarStyleOptions)
-		uni.setNavigationBarColor({
-			frontColor: "#000000",
-			backgroundColor: "#f8f8f8"
-		} as SetNavigationBarColorOptions)
 	}
 }

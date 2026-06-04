@@ -115,7 +115,7 @@
 
 	onShow(() => {
 		isDark.value = isDarkNow()
-		applyChrome(isDark.value)
+		applyChrome(isDark.value, true)
 		load()
 	})
 

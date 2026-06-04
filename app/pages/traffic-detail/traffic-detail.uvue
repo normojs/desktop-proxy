@@ -1,0 +1,105 @@
+<template>
+	<scroll-view class="page" :class="isDark ? 'theme-dark' : 'theme-light'" style="flex:1">
+		<view class="wrap">
+			<text class="h1" style="margin-bottom:16px;">请求详情</text>
+
+			<view v-if="!loaded" class="card"><text class="muted">{{ errText }}</text></view>
+
+			<view v-else>
+				<view class="card">
+					<view class="between" style="margin-bottom:6px;">
+						<text class="title">{{ method }}</text>
+						<text :class="ok ? 'badge-on' : 'badge-off'">{{ statusText }}</text>
+					</view>
+					<text class="muted-sm">{{ url }}</text>
+				</view>
+
+				<view class="card" style="padding-top:2px;padding-bottom:2px;">
+					<view class="rowb"><text class="label">模型</text><text class="val">{{ model }}</text></view>
+					<view class="rowb"><text class="label">服务</text><text class="val">{{ service }}</text></view>
+					<view class="rowb"><text class="label">Tokens（入+出=总）</text><text class="val">{{ tokensText }}</text></view>
+					<view class="row"><text class="label">成本</text><text class="val-blue">{{ costText }}</text></view>
+				</view>
+
+				<text class="section">请求体</text>
+				<view class="card"><text class="mono">{{ reqBody }}</text></view>
+
+				<text class="section">响应体</text>
+				<view class="card"><text class="mono">{{ resBody }}</text></view>
+			</view>
+		</view>
+	</scroll-view>
+</template>
+
+<script setup lang="uts">
+	import { request, getSelTraffic } from "@/common/store.uts"
+	import { isDarkNow, applyChrome } from "@/common/theme.uts"
+
+	const isDark = ref(false)
+	const loaded = ref(false)
+	const errText = ref("加载中…")
+	const method = ref("")
+	const url = ref("")
+	const statusText = ref("")
+	const ok = ref(true)
+	const model = ref("")
+	const service = ref("")
+	const tokensText = ref("")
+	const costText = ref("")
+	const reqBody = ref("")
+	const resBody = ref("")
+
+	function money(v : number) : string {
+		const cents = Math.round(v * 10000)
+		const whole = Math.floor(cents / 10000)
+		let frac = (cents % 10000).toString()
+		while (frac.length < 4) {
+			frac = "0" + frac
+		}
+		return "$" + whole.toString() + "." + frac
+	}
+
+	onShow(() => {
+		isDark.value = isDarkNow()
+		applyChrome(isDark.value, false)
+		const i = getSelTraffic()
+		if (i < 0) {
+			errText.value = "无选中条目"
+			loaded.value = false
+			return
+		}
+		request("traffic.detail", i).then((r : any) : void => {
+			if (r == null) {
+				errText.value = "未找到该记录"
+				loaded.value = false
+				return
+			}
+			const o = JSON.parse(JSON.stringify(r)) as UTSJSONObject
+			method.value = o.getString("method") ?? ""
+			url.value = o.getString("url") ?? ""
+			const st = (o.getNumber("status") ?? 0)
+			statusText.value = st.toString()
+			ok.value = st < 400
+			model.value = o.getString("model") ?? "—"
+			service.value = o.getString("service") ?? "—"
+			const u = o.getJSON("usage")
+			if (u != null) {
+				const pt = Math.round(u!.getNumber("promptTokens") ?? 0)
+				const ct = Math.round(u!.getNumber("completionTokens") ?? 0)
+				const tt = Math.round(u!.getNumber("totalTokens") ?? 0)
+				tokensText.value = pt.toString() + " + " + ct.toString() + " = " + tt.toString()
+				const cost = u!.getNumber("costUsd")
+				costText.value = cost != null ? money(cost!) : "—"
+			} else {
+				tokensText.value = "—"
+				costText.value = "—"
+			}
+			reqBody.value = o.getString("reqBody") ?? "（空）"
+			resBody.value = o.getString("resBody") ?? "（空）"
+			loaded.value = true
+		}).catch((e : any) : void => {
+			errText.value = "查询失败: " + e
+			loaded.value = false
+		})
+	})
+</script>

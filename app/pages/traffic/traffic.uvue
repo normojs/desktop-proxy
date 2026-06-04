@@ -10,7 +10,7 @@
 
 			<view v-else>
 				<view v-if="items.length == 0" class="card"><text class="muted">暂无调用记录</text></view>
-				<view v-for="(it, idx) in items" :key="idx" class="item">
+				<view v-for="(it, idx) in items" :key="idx" class="item" @click="openDetail(it.di)">
 					<view :class="it.ok ? 'dot-green' : 'dot-red'"></view>
 					<view class="flex1" style="margin-left:10px;">
 						<text class="title">{{ it.model }}</text>
@@ -28,10 +28,10 @@
 </template>
 
 <script setup lang="uts">
-	import { request, isConnected } from "@/common/store.uts"
+	import { request, isConnected, setSelTraffic } from "@/common/store.uts"
 	import { isDarkNow, applyChrome } from "@/common/theme.uts"
 
-	type TItem = { model : string; sub : string; cost : string; tok : string; ok : boolean }
+	type TItem = { model : string; sub : string; cost : string; tok : string; ok : boolean; di : number }
 
 	const isDark = ref(false)
 
@@ -72,7 +72,8 @@
 						sub: (e.getString("method") ?? "") + " · " + (e.getString("service") ?? "") + " · " + (tRaw.length >= 19 ? tRaw.substring(11, 19) : tRaw),
 						cost: c != null ? money(c!) : "—",
 						tok: tk != null ? (Math.round(tk!).toString() + " tok") : "",
-						ok: st < 400
+						ok: st < 400,
+						di: e.getNumber("i") ?? -1
 					} as TItem)
 				}
 			}
@@ -85,11 +86,16 @@
 
 	onShow(() => {
 		isDark.value = isDarkNow()
-		applyChrome(isDark.value)
+		applyChrome(isDark.value, true)
 		load()
 	})
 
 	const goPair = () => {
 		uni.navigateTo({ url: "/pages/pair/pair" } as NavigateToOptions)
+	}
+
+	const openDetail = (di : number) => {
+		setSelTraffic(di)
+		uni.navigateTo({ url: "/pages/traffic-detail/traffic-detail" } as NavigateToOptions)
 	}
 </script>

@@ -158,7 +158,7 @@
 	onShow(() => {
 		isDark.value = isDarkNow()
 		themeLabel.value = themeMode()
-		applyChrome(isDark.value)
+		applyChrome(isDark.value, true)
 		load()
 	})
 
@@ -170,6 +170,6 @@
 		cycleTheme()
 		isDark.value = isDarkNow()
 		themeLabel.value = themeMode()
-		applyChrome(isDark.value)
+		applyChrome(isDark.value, true)
 	}
 </script>
