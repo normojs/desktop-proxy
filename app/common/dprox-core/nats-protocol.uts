@@ -1,0 +1,199 @@
+// 最小 NATS 线协议编解码（remote-core/nats-protocol.ts 的 UTS 移植）。
+// 解析按字节精确（MSG 负载长度按字节；控制行是 ASCII）。缓冲不完整帧。
+// 原生友好：用 class 取代 TS 联合类型；显式边界；不用正则；数字转字符串用 toString()。
+
+import { utf8Encode } from "./util.uts"
+
+// 一条解析出的消息。用 kind 区分（"INFO"/"MSG"/"PING"/"PONG"/"OK"/"ERR"）。
+export class NatsMsg {
+	kind : string
+	info : UTSJSONObject | null = null
+	subject : string = ""
+	sid : string = ""
+	reply : string | null = null
+	payload : Uint8Array | null = null
+	message : string = ""
+	constructor(kind : string) {
+		this.kind = kind
+	}
+}
+
+// 流式解析器：喂入 socket 字节，取出完整消息。
+export class NatsParser {
+	private buf : Uint8Array = new Uint8Array(0)
+
+	private indexOfCRLF(from : number) : number {
+		for (let i = from; i + 1 < this.buf.length; i++) {
+			if (this.buf[i] == 13 && this.buf[i + 1] == 10) {
+				return i
+			}
+		}
+		return -1
+	}
+
+	private asciiLine(start : number, end : number) : string {
+		let s = ""
+		for (let i = start; i < end; i++) {
+			s += String.fromCharCode(this.buf[i])
+		}
+		return s
+	}
+
+	private splitSpaces(s : string) : string[] {
+		const raw = s.split(" ")
+		const out : string[] = []
+		for (let i = 0; i < raw.length; i++) {
+			if (raw[i].length > 0) {
+				out.push(raw[i])
+			}
+		}
+		return out
+	}
+
+	push(chunk : Uint8Array) : NatsMsg[] {
+		if (this.buf.length == 0) {
+			this.buf = chunk
+		} else {
+			const merged = new Uint8Array(this.buf.length + chunk.length)
+			for (let i = 0; i < this.buf.length; i++) {
+				merged[i] = this.buf[i]
+			}
+			for (let i = 0; i < chunk.length; i++) {
+				merged[this.buf.length + i] = chunk[i]
+			}
+			this.buf = merged
+		}
+
+		const out : NatsMsg[] = []
+		let consumed = 0
+		while (true) {
+			const crlf = this.indexOfCRLF(consumed)
+			if (crlf < 0) {
+				break
+			}
+			const line = this.asciiLine(consumed, crlf)
+
+			if (line.startsWith("MSG ")) {
+				const parts = this.splitSpaces(line.substring(4))
+				if (parts.length < 3) {
+					consumed = crlf + 2
+					continue
+				}
+				const nBytes = parseInt(parts[parts.length - 1])
+				const payloadStart = crlf + 2
+				const payloadEnd = payloadStart + nBytes
+				if (payloadEnd + 2 > this.buf.length) {
+					break // 等待完整负载 + 末尾 CRLF
+				}
+				const payload = new Uint8Array(nBytes)
+				for (let i = 0; i < nBytes; i++) {
+					payload[i] = this.buf[payloadStart + i]
+				}
+				const m = new NatsMsg("MSG")
+				m.subject = parts[0]
+				m.sid = parts[1]
+				m.reply = parts.length == 4 ? parts[2] : null
+				m.payload = payload
+				out.push(m)
+				consumed = payloadEnd + 2
+				continue
+			}
+
+			consumed = crlf + 2
+			if (line.startsWith("INFO")) {
+				const m = new NatsMsg("INFO")
+				try {
+					m.info = JSON.parse(line.substring(5)) as UTSJSONObject
+				} catch (e) {
+					// 跳过无效 INFO
+				}
+				out.push(m)
+			} else if (line.startsWith("PING")) {
+				out.push(new NatsMsg("PING"))
+			} else if (line.startsWith("PONG")) {
+				out.push(new NatsMsg("PONG"))
+			} else if (line.startsWith("+OK")) {
+				out.push(new NatsMsg("OK"))
+			} else if (line.startsWith("-ERR")) {
+				const m = new NatsMsg("ERR")
+				m.message = line.substring(4).trim()
+				out.push(m)
+			}
+		}
+
+		if (consumed > 0) {
+			const remaining = new Uint8Array(this.buf.length - consumed)
+			for (let i = 0; i < remaining.length; i++) {
+				remaining[i] = this.buf[consumed + i]
+			}
+			this.buf = remaining
+		}
+		return out
+	}
+}
+
+export class ConnectOpts {
+	jwt : string | null = null
+	sig : string | null = null
+	user : string | null = null
+	pass : string | null = null
+	name : string = "dprox-app"
+}
+
+export function buildConnect(opts : ConnectOpts) : string {
+	let json = "{\"verbose\":false,\"pedantic\":false,\"protocol\":1,\"lang\":\"uts\""
+	json += ",\"name\":\"" + opts.name + "\""
+	if (opts.jwt != null) {
+		json += ",\"jwt\":\"" + opts.jwt + "\""
+	}
+	if (opts.sig != null) {
+		json += ",\"sig\":\"" + opts.sig + "\""
+	}
+	if (opts.user != null) {
+		json += ",\"user\":\"" + opts.user + "\""
+	}
+	if (opts.pass != null) {
+		json += ",\"pass\":\"" + opts.pass + "\""
+	}
+	json += "}"
+	return "CONNECT " + json + "\r\n"
+}
+
+export function buildSub(subject : string, sid : string) : string {
+	return "SUB " + subject + " " + sid + "\r\n"
+}
+
+export function buildUnsub(sid : string) : string {
+	return "UNSUB " + sid + "\r\n"
+}
+
+// PUB（UTF-8 负载）→ 字节；头是 ASCII，长度为字节数。
+export function buildPub(subject : string, reply : string | null, payload : string) : Uint8Array {
+	const body = utf8Encode(payload)
+	let header = ""
+	if (reply != null) {
+		header = "PUB " + subject + " " + reply + " " + body.length.toString() + "\r\n"
+	} else {
+		header = "PUB " + subject + " " + body.length.toString() + "\r\n"
+	}
+	const headerBytes = utf8Encode(header)
+	const tail = utf8Encode("\r\n")
+	const out = new Uint8Array(headerBytes.length + body.length + tail.length)
+	let p = 0
+	for (let i = 0; i < headerBytes.length; i++) {
+		out[p] = headerBytes[i]
+		p++
+	}
+	for (let i = 0; i < body.length; i++) {
+		out[p] = body[i]
+		p++
+	}
+	for (let i = 0; i < tail.length; i++) {
+		out[p] = tail[i]
+		p++
+	}
+	return out
+}
+
+export const PING : string = "PING\r\n"
+export const PONG : string = "PONG\r\n"

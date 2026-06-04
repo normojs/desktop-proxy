@@ -6,9 +6,10 @@
 </template>
 
 <script setup lang="uts">
-	import { utf8Encode, utf8Decode, utf8Length } from "@/common/dprox-core/util.uts"
+	import { utf8Encode, utf8Decode, utf8Length, concatBytes } from "@/common/dprox-core/util.uts"
 	import { crc16, encodeSeed, decodeSeed, base64UrlFromBytes, PREFIX_USER } from "@/common/dprox-core/nkey.uts"
 	import { rpcSubject, clientEventSubscription, topicFromSubject } from "@/common/dprox-core/subjects.uts"
+	import { NatsParser, buildPub } from "@/common/dprox-core/nats-protocol.uts"
 
 	const title = ref('Hello')
 
@@ -44,9 +45,20 @@
 			&& topicFromSubject("dp.i1.h2c.event.budget:alert") == "budget:alert"
 			&& topicFromSubject("dp.i1.rpc.x") == null
 
-		const pass = okRound && okLen && okCrc && okSeed && okB64 && okSubj
-		console.log("[dprox-core] self-check util(round=" + okRound + ",len=" + okLen + ") nkey(crc=" + okCrc + ",seed=" + okSeed + ",b64=" + okB64 + ") subjects(" + okSubj + ")")
-		title.value = pass ? "dprox-core util+nkey+subjects ✓" : "dprox-core ✗ (see console)"
+		// nats-protocol: 解析 INFO+PING、含中文负载的 MSG、buildPub 字节长度
+		const parser = new NatsParser()
+		const ctrl = parser.push(utf8Encode("INFO {\"nonce\":\"abc\"}\r\nPING\r\n"))
+		const okCtrl = ctrl.length == 2 && ctrl[0].kind == "INFO" && ctrl[1].kind == "PING"
+		const msgFrame = concatBytes(concatBytes(utf8Encode("MSG dp.i1.h2c.event.traffic 1 6\r\n"), utf8Encode("你好")), utf8Encode("\r\n"))
+		const msgs = parser.push(msgFrame)
+		const okMsg = msgs.length == 1 && msgs[0].kind == "MSG" && msgs[0].subject == "dp.i1.h2c.event.traffic" && msgs[0].payload != null && utf8Decode(msgs[0].payload!) == "你好"
+		const pubStr = utf8Decode(buildPub("dp.i1.rpc.config.set", "_INBOX.r1", "{\"x\":\"你好\"}"))
+		const okPub = pubStr.startsWith("PUB dp.i1.rpc.config.set _INBOX.r1 14\r\n") && pubStr.endsWith("\r\n")
+		const okNats = okCtrl && okMsg && okPub
+
+		const pass = okRound && okLen && okCrc && okSeed && okB64 && okSubj && okNats
+		console.log("[dprox-core] self-check util(round=" + okRound + ",len=" + okLen + ") nkey(crc=" + okCrc + ",seed=" + okSeed + ",b64=" + okB64 + ") subjects(" + okSubj + ") nats(ctrl=" + okCtrl + ",msg=" + okMsg + ",pub=" + okPub + ")")
+		title.value = pass ? "dprox-core +nats ✓" : "dprox-core ✗ (see console)"
 	})
 </script>
 
