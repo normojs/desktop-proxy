@@ -1,0 +1,76 @@
+// 全局连接存储（模块单例，跨屏共享同一条 NATS 连接）。
+// 屏幕通过 connect() 建链、request() 调用 RPC、setStateListener() 订阅状态。
+// ed25519 签名按平台注入：H5 用 tweetnacl；原生后续换 uts-nkeys 插件。
+
+// #ifdef H5
+import nacl from "tweetnacl"
+// #endif
+import { NatsConnection, SignFn, StateFn } from "./dprox-core/connection.uts"
+import { pairingFromString, PairingPayload } from "./dprox-core/subjects.uts"
+import { decodeSeed } from "./dprox-core/nkey.uts"
+
+let conn : NatsConnection | null = null
+let state : string = "未连接"
+let pairing : PairingPayload | null = null
+let stateListener : ((s : string) => void) | null = null
+
+export function getState() : string {
+	return state
+}
+
+export function isConnected() : boolean {
+	return state == "authed"
+}
+
+export function getPairing() : PairingPayload | null {
+	return pairing
+}
+
+export function setStateListener(fn : ((s : string) => void) | null) : void {
+	stateListener = fn
+}
+
+// 解析配对链接并开始连接。返回 "" 表示已开始连接，否则返回错误信息。
+export function connect(link : string) : string {
+	const pp = pairingFromString(link)
+	if (pp == null) {
+		return "配对链接解析失败"
+	}
+	if (pp.wsUrl == null) {
+		return "配对缺少 wsUrl（桌面 remote 配置需加 wss://…:8443）"
+	}
+	if (pp.seed == null || pp.jwt == null) {
+		return "配对缺少 seed/jwt"
+	}
+	pairing = pp
+
+	const seedBytes = decodeSeed(pp.seed!).seed
+	let signFn : SignFn = (nonce : Uint8Array) : Uint8Array => {
+		return new Uint8Array(0) // 原生占位，后续 uts-nkeys 插件
+	}
+	// #ifdef H5
+	signFn = (nonce : Uint8Array) : Uint8Array => {
+		const kp = nacl.sign.keyPair.fromSeed(seedBytes)
+		return nacl.sign.detached(nonce, kp.secretKey) as Uint8Array
+	}
+	// #endif
+
+	const clientId = "phone-" + Date.now().toString()
+	const onState : StateFn = (st : string, detail : string) : void => {
+		state = detail != "" ? (st + " " + detail) : st
+		if (stateListener != null) {
+			stateListener!(state)
+		}
+	}
+	conn = new NatsConnection(pp.wsUrl!, pp.jwt!, pp.instanceId, clientId, signFn, onState, 15000)
+	conn!.connect()
+	return ""
+}
+
+// 调用一个远程 RPC（如 relay.summary）。未连接则 reject。
+export function request(method : string, params : any) : Promise<any> {
+	if (conn == null) {
+		return Promise.reject(new Error("未连接"))
+	}
+	return conn!.getBus().request(method, params)
+}
