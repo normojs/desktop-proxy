@@ -1,0 +1,18 @@
+{
+  "name": "app",
+  "version": "1.0.0",
+  "description": "Native phone app (Android / iOS / HarmonyOS) that observes and controls the **desktop-proxy** relay over the NATS remote bus. **Nested at `desktop-proxy/app/`** (one repo/window): the uni-app x MCP (`@dcloudio/uni-app-x-mcp`) is configured at the desktop-proxy **root** `.cursor/mcp.json`, and the uni-app x rules live in `app/.cursor/rules/` (Cursor scopes nested rules to this `app/` subtree). The app is excluded from the framework's pnpm/vitest/tsc. Build/run with **HBuilderX**.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "tweetnacl": "^1.0.3"
+  }
+}

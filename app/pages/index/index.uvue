@@ -8,7 +8,7 @@
 <script setup lang="uts">
 	import { utf8Encode, utf8Decode, utf8Length, concatBytes } from "@/common/dprox-core/util.uts"
 	import { crc16, encodeSeed, decodeSeed, base64UrlFromBytes, PREFIX_USER } from "@/common/dprox-core/nkey.uts"
-	import { rpcSubject, clientEventSubscription, topicFromSubject } from "@/common/dprox-core/subjects.uts"
+	import { rpcSubject, clientEventSubscription, topicFromSubject, pairingFromString } from "@/common/dprox-core/subjects.uts"
 	import { NatsParser, buildPub } from "@/common/dprox-core/nats-protocol.uts"
 	import { BusClient } from "@/common/dprox-core/bus-client.uts"
 
@@ -46,6 +46,11 @@
 			&& topicFromSubject("dp.i1.h2c.event.budget:alert") == "budget:alert"
 			&& topicFromSubject("dp.i1.rpc.x") == null
 
+		// subjects: 配对链接解析（用本模块自身 base64url 编码构造）
+		const pj = "{\"v\":1,\"instanceId\":\"i1\",\"url\":\"nats://x\",\"wsUrl\":\"wss://x\",\"jwt\":\"J\",\"seed\":\"S\"}"
+		const pp = pairingFromString("desktopproxy://pair?d=" + base64UrlFromBytes(utf8Encode(pj)))
+		const okPair = pp != null && pp!.instanceId == "i1" && pp!.wsUrl == "wss://x" && pp!.jwt == "J" && pp!.seed == "S" && pp!.user == null
+
 		// nats-protocol: 解析 INFO+PING、含中文负载的 MSG、buildPub 字节长度
 		const parser = new NatsParser()
 		const ctrl = parser.push(utf8Encode("INFO {\"nonce\":\"abc\"}\r\nPING\r\n"))
@@ -74,9 +79,9 @@
 		bus.handleMessage("dp.i1.h2c.event.budget:alert", "{\"data\":{\"scope\":\"daily\"}}")
 		const okBus = okReq && gotEvt
 
-		const pass = okRound && okLen && okCrc && okSeed && okB64 && okSubj && okNats && okBus
-		console.log("[dprox-core] self-check util(round=" + okRound + ",len=" + okLen + ") nkey(crc=" + okCrc + ",seed=" + okSeed + ",b64=" + okB64 + ") subjects(" + okSubj + ") nats(ctrl=" + okCtrl + ",msg=" + okMsg + ",pub=" + okPub + ") bus(req=" + okReq + ",evt=" + gotEvt + ")")
-		title.value = pass ? "dprox-core +bus ✓" : "dprox-core ✗ (see console)"
+		const pass = okRound && okLen && okCrc && okSeed && okB64 && okSubj && okPair && okNats && okBus
+		console.log("[dprox-core] self-check util(round=" + okRound + ",len=" + okLen + ") nkey(crc=" + okCrc + ",seed=" + okSeed + ",b64=" + okB64 + ") subjects(" + okSubj + ",pair=" + okPair + ") nats(ctrl=" + okCtrl + ",msg=" + okMsg + ",pub=" + okPub + ") bus(req=" + okReq + ",evt=" + gotEvt + ")")
+		title.value = pass ? "dprox-core +pair ✓" : "dprox-core ✗ (see console)"
 	})
 </script>
 

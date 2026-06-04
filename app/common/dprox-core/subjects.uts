@@ -1,6 +1,8 @@
-// NATS 主题方案（remote-core/subjects.ts 的 UTS 移植，P1 传输所需部分）。
+// NATS 主题方案（remote-core/subjects.ts 的 UTS 移植）。
 // 手机是客户端：向 dp.<id>.rpc.<method> 发布，订阅 dp.<id>.h2c.event.>。
-// 纯字符串操作，原生风险低。配对解析(pairingFromString, 依赖 UTSJSONObject)留到 Pair 屏再做。
+// 含配对链接解析（desktopproxy://pair?d=<base64url(json)>）。
+
+import { utf8Decode } from "./util.uts"
 
 const ROOT = "dp"
 
@@ -24,4 +26,105 @@ export function topicFromSubject(subject : string) : string | null {
 		return null
 	}
 	return subject.substring(at + marker.length)
+}
+
+// 配对载荷：可选字段统一用 | null（UTS 不用 undefined）。
+export type PairingPayload = {
+	instanceId : string
+	url : string
+	wsUrl : string | null
+	name : string | null
+	jwt : string | null
+	seed : string | null
+	user : string | null
+	pass : string | null
+}
+
+const B64STD = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+// base64url → 字节（容忍 -/_ 与无填充；忽略非字母表字符）。
+function base64UrlToBytes(b64url : string) : Uint8Array {
+	const out : number[] = []
+	let buffer = 0
+	let bits = 0
+	for (let i = 0; i < b64url.length; i++) {
+		let ch = b64url.charAt(i)
+		if (ch == "-") {
+			ch = "+"
+		} else if (ch == "_") {
+			ch = "/"
+		}
+		const idx = B64STD.indexOf(ch)
+		if (idx < 0) {
+			continue
+		}
+		buffer = (buffer << 6) | idx
+		bits += 6
+		if (bits >= 8) {
+			out.push((buffer >> (bits - 8)) & 0xff)
+			bits -= 8
+		}
+	}
+	const bytes = new Uint8Array(out.length)
+	for (let i = 0; i < out.length; i++) {
+		bytes[i] = out[i]
+	}
+	return bytes
+}
+
+// 从 "...?d=XXX" / "...&d=XXX" 取出 d 参数；没有则返回 null。
+function extractD(s : string) : string | null {
+	let start = -1
+	const a = s.indexOf("?d=")
+	if (a >= 0) {
+		start = a + 3
+	} else {
+		const b = s.indexOf("&d=")
+		if (b >= 0) {
+			start = b + 3
+		}
+	}
+	if (start < 0) {
+		return null
+	}
+	let end = s.indexOf("&", start)
+	if (end < 0) {
+		end = s.length
+	}
+	return s.substring(start, end)
+}
+
+function parsePairingJson(json : string) : PairingPayload | null {
+	let obj : UTSJSONObject | null = null
+	try {
+		obj = JSON.parse(json) as UTSJSONObject
+	} catch (e) {
+		return null
+	}
+	if (obj == null) {
+		return null
+	}
+	const instanceId = obj!.getString("instanceId")
+	if (instanceId == null) {
+		return null
+	}
+	const url = obj!.getString("url")
+	const payload : PairingPayload = {
+		instanceId: instanceId!,
+		url: url != null ? url! : "",
+		wsUrl: obj!.getString("wsUrl"),
+		name: obj!.getString("name"),
+		jwt: obj!.getString("jwt"),
+		seed: obj!.getString("seed"),
+		user: obj!.getString("user"),
+		pass: obj!.getString("pass")
+	}
+	return payload
+}
+
+// 解析配对链接（或裸 base64url(json) / 裸 json）。失败返回 null。
+export function pairingFromString(s : string) : PairingPayload | null {
+	const d = extractD(s)
+	const json = d != null ? utf8Decode(base64UrlToBytes(d!)) : s
+	return parsePairingJson(json)
 }
