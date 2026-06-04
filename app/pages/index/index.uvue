@@ -8,6 +8,7 @@
 <script setup lang="uts">
 	import { utf8Encode, utf8Decode, utf8Length } from "@/common/dprox-core/util.uts"
 	import { crc16, encodeSeed, decodeSeed, base64UrlFromBytes, PREFIX_USER } from "@/common/dprox-core/nkey.uts"
+	import { rpcSubject, clientEventSubscription, topicFromSubject } from "@/common/dprox-core/subjects.uts"
 
 	const title = ref('Hello')
 
@@ -37,9 +38,15 @@
 		// nkey: base64url
 		const okB64 = base64UrlFromBytes(utf8Encode("foobar")) == "Zm9vYmFy"
 
-		const pass = okRound && okLen && okCrc && okSeed && okB64
-		console.log("[dprox-core] self-check util(round=" + okRound + ",len=" + okLen + ") nkey(crc=" + okCrc + ",seed=" + okSeed + ",b64=" + okB64 + ")")
-		title.value = pass ? "dprox-core util+nkey ✓" : "dprox-core ✗ (see console)"
+		// subjects
+		const okSubj = rpcSubject("i1", "config.get") == "dp.i1.rpc.config.get"
+			&& clientEventSubscription("i1") == "dp.i1.h2c.event.>"
+			&& topicFromSubject("dp.i1.h2c.event.budget:alert") == "budget:alert"
+			&& topicFromSubject("dp.i1.rpc.x") == null
+
+		const pass = okRound && okLen && okCrc && okSeed && okB64 && okSubj
+		console.log("[dprox-core] self-check util(round=" + okRound + ",len=" + okLen + ") nkey(crc=" + okCrc + ",seed=" + okSeed + ",b64=" + okB64 + ") subjects(" + okSubj + ")")
+		title.value = pass ? "dprox-core util+nkey+subjects ✓" : "dprox-core ✗ (see console)"
 	})
 </script>
 

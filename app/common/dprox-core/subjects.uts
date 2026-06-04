@@ -1,0 +1,27 @@
+// NATS 主题方案（remote-core/subjects.ts 的 UTS 移植，P1 传输所需部分）。
+// 手机是客户端：向 dp.<id>.rpc.<method> 发布，订阅 dp.<id>.h2c.event.>。
+// 纯字符串操作，原生风险低。配对解析(pairingFromString, 依赖 UTSJSONObject)留到 Pair 屏再做。
+
+const ROOT = "dp"
+
+export function rpcSubject(instanceId : string, method : string) : string {
+	return ROOT + "." + instanceId + ".rpc." + method
+}
+
+export function clientEventSubscription(instanceId : string) : string {
+	return ROOT + "." + instanceId + ".h2c.event.>"
+}
+
+// 从 hub→client 事件主题里解析出 <topic>，不是事件主题则返回 null。
+export function topicFromSubject(subject : string) : string | null {
+	const prefix = ROOT + "."
+	if (!subject.startsWith(prefix)) {
+		return null
+	}
+	const marker = ".h2c.event."
+	const at = subject.indexOf(marker)
+	if (at < 0) {
+		return null
+	}
+	return subject.substring(at + marker.length)
+}
