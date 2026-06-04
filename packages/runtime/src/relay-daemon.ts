@@ -81,29 +81,33 @@ async function main(): Promise<void> {
   // In-memory ring buffer powering the local dashboard.
   const recent: UiEntry[] = [];
   const RECENT_MAX = 1000;
-  const budget = createBudgetTracker(join(LOG_DIR, `relay-${relayPort}-budget.json`), () => r.budget);
+  // Budget reads config live so a phone config.set takes effect without a restart.
+  const budget = createBudgetTracker(join(LOG_DIR, `relay-${relayPort}-budget.json`), () => readRelayConfig().relay.budget);
 
-  const opts: RelayOptions = {
-    port: r.port ?? 8788,
-    upstream: r.upstream,
-    proxy: r.proxy,
-    apiKey: r.apiKey,
-    modelMap: r.modelMap,
-    fallbackModels: r.fallbackModels,
-    upstreamApi: r.upstreamApi,
-    transforms: r.transforms,
-    routes: r.routes,
-    guardrails: r.guardrails,
+  const upstream0: string = r.upstream; // narrowed to string by the guard above
+  const makeOpts = (rc: RelayCfg): RelayOptions => ({
+    port: rc.port ?? 8788,
+    upstream: rc.upstream ?? upstream0,
+    proxy: rc.proxy,
+    apiKey: rc.apiKey,
+    modelMap: rc.modelMap,
+    fallbackModels: rc.fallbackModels,
+    upstreamApi: rc.upstreamApi,
+    transforms: rc.transforms,
+    routes: rc.routes,
+    guardrails: rc.guardrails,
     maxBodyBytes,
-  };
+  });
 
-  const handle = await startRelay(opts, {
+  // Wrapped so the relay can be restarted with fresh config (config.set hot-reload).
+  const startRelayNow = (rc: RelayCfg) =>
+    startRelay(makeOpts(rc), {
     log,
     beforeForward: () => {
       const v = budget.check();
       if (!v.over) return undefined;
       const msg = `relay budget exceeded: ${v.scope} $${v.spent.toFixed(4)} ≥ $${v.limit}`;
-      if (r.budget?.action === "block") return { block: true, status: 402, message: msg };
+      if (readRelayConfig().relay.budget?.action === "block") return { block: true, status: 402, message: msg };
       log("warn", msg);
       return undefined;
     },
@@ -154,6 +158,15 @@ async function main(): Promise<void> {
     },
   });
 
+  let handle = await startRelayNow(r);
+
+  // Restart the relay with fresh config (model map / upstream / etc. from config.set).
+  const reloadRelay = async (): Promise<void> => {
+    await handle.close();
+    handle = await startRelayNow(readRelayConfig().relay);
+    log("info", "relay reloaded from config (model map / upstream / budget applied)");
+  };
+
   log("info", `daemon listening on http://127.0.0.1:${handle.port} → ${r.upstream}${r.upstreamApi === "chat" ? " (Responses↔chat)" : ""}`);
   log("info", `recording to ${join(LOG_DIR, `relay-${relayPort}.ndjson`)} — Ctrl-C to stop.`);
 
@@ -173,7 +186,7 @@ async function main(): Promise<void> {
   // is enabled. Failures are non-fatal: the daemon keeps relaying locally.
   let remoteBus: DaemonBus | null = null;
   try {
-    remoteBus = await startDaemonRemoteBus({ relayPort, recent, log });
+    remoteBus = await startDaemonRemoteBus({ relayPort, recent, reload: reloadRelay, log });
   } catch (e) {
     log("warn", "remote bus failed:", String(e));
   }

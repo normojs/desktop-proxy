@@ -74,7 +74,7 @@ export interface DaemonBus {
  * Connect the daemon to the remote bus. Returns null (and logs why) when remote
  * is not configured, so the daemon keeps running as a pure local relay.
  */
-export async function startDaemonRemoteBus(opts: { relayPort: number; recent: UiEntry[]; log: Logger }): Promise<DaemonBus | null> {
+export async function startDaemonRemoteBus(opts: { relayPort: number; recent: UiEntry[]; reload: () => Promise<void>; log: Logger }): Promise<DaemonBus | null> {
   const cfg = readConfig();
   const r = (cfg.remote ?? {}) as RemoteCfg;
   if (r.enabled !== true || !r.url) {
@@ -124,6 +124,36 @@ export async function startDaemonRemoteBus(opts: { relayPort: number; recent: Ui
   bus.handle("config.get", (_p, ctx) => {
     const c = { ...readConfig(), version: "daemon" };
     return ctx.source === "nats" ? redactConfigForRemote(c) : c;
+  });
+
+  // Remote control: merge a partial config, persist, then hot-reload the relay so
+  // model-map / upstream / budget changes from the phone take effect immediately.
+  bus.handle("config.set", async (p, ctx) => {
+    const patch = (p ?? {}) as Record<string, unknown>;
+    // A remote caller must not overwrite a real secret with the masked placeholder
+    // it received from config.get; drop masked credential fields.
+    if (ctx.source === "nats") {
+      const relay = patch.relay as Record<string, unknown> | undefined;
+      if (relay && typeof relay.apiKey === "string" && relay.apiKey.includes("***")) delete relay.apiKey;
+    }
+    const cfg = readConfig();
+    const merged: Record<string, unknown> = { ...cfg };
+    for (const k of Object.keys(patch)) {
+      const v = patch[k];
+      const cur = cfg[k];
+      if (k === "relay" && v != null && typeof v === "object" && cur != null && typeof cur === "object") {
+        merged.relay = { ...(cur as Record<string, unknown>), ...(v as Record<string, unknown>) };
+      } else {
+        merged[k] = v;
+      }
+    }
+    writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2));
+    try {
+      await opts.reload();
+    } catch (e) {
+      opts.log("warn", "reload after config.set failed:", String(e));
+    }
+    return { ok: true };
   });
 
   // Recent relay calls from the in-memory ring buffer (newest first), wrapped in
